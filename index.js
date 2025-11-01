@@ -11,7 +11,7 @@ app.listen(PORT, () => console.log(`[SERVER] Running on port ${PORT}`));
 
 function createBot() {
   const bot = mineflayer.createBot({
-    username: config['bot-account'].username,
+    username: "RoasterXXX24/7Fryer",
     password: config['bot-account'].password,
     auth: config['bot-account'].type,
     host: config.server.ip,
@@ -22,12 +22,12 @@ function createBot() {
   bot.loadPlugin(pathfinder);
 
   bot.once('spawn', () => {
-    console.log('[BOT] RoasterXXX joined the server! 😎');
+    console.log('[BOT] RoasterXXX24/7Fryer joined the server! 🔥');
     const mcData = require('minecraft-data')(bot.version);
     const defaultMove = new Movements(bot, mcData);
     bot.pathfinder.setMovements(defaultMove);
 
-    // 🔥 Random roast messages (India style)
+    // 💬 Random Indian roast messages
     const roastMessages = [
       "Bro plays Minecraft on mobile and still dies to zombies 💀",
       "Abe realm kharid liya, skill kab kharidega? 😂",
@@ -41,13 +41,13 @@ function createBot() {
       "Main free me chal raha hu, tu paisa de ke crash kar raha hai 😂"
     ];
 
-    // 💬 Send random message every 60 seconds
+    // 💬 Send random roast every 60 seconds
     setInterval(() => {
       const msg = roastMessages[Math.floor(Math.random() * roastMessages.length)];
       bot.chat(msg);
     }, 60000);
 
-    // 🤖 Move randomly to avoid AFK kick
+    // 🤖 Random movement (Anti-AFK)
     setInterval(() => {
       const x = bot.entity.position.x + (Math.random() * 4 - 2);
       const z = bot.entity.position.z + (Math.random() * 4 - 2);
