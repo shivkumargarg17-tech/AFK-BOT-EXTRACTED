@@ -1,74 +1,78 @@
 const mineflayer = require('mineflayer');
-const config = require('./settings.json');
+const express = require('express');
 
+const app = express();
+app.get('/', (req, res) => res.send('24/7RoasterXXX is alive! 🔥'));
+const PORT = process.env.PORT || 8000;
+app.listen(PORT, () => console.log(`✅ Server started on port ${PORT}`));
+
+// ==========================
+// CONFIGURATION
+// ==========================
+const config = {
+  username: "24/7RoasterXXX",
+  password: "",
+  auth: "mojang",
+  host: "HOGAKING.aternos.me",
+  port: 19754,
+  version: "1.12.1",
+  messageDelay: 60, // seconds between messages
+  rejoinDelay: 10000, // 10 sec rejoin after leave
+  stayDuration: 70000, // stay 70 sec before leaving
+  roastMessages: [
+    "While you were buying realms, I was buying knowledge😎",
+    "Call me server admin, because I technically am🤣🤣",
+    "You spent ₹20k on games, I spent ₹0 but still win💀",
+    "24/7 online unlike some people's IQ💀🤣",
+    "You paid ₹20k in game, I paid ₹0 for brain🧠🤯💀",
+    "Bro bought a realm and still can't buy skill💀",
+    "Not paid to win, just coded to rule🔥",
+    "Imagine paying for Realms just to get carried by a bot 💀",
+    "Keep spending money, I’ll keep owning servers for free 💪",
+    "This bot runs smoother than your gameplay 💀",
+    "Still waiting for someone to match my IQ level ⏳",
+    "Imagine paying for lag💀"
+  ]
+};
+
+// ==========================
+// BOT CREATION
+// ==========================
 function createBot() {
   const bot = mineflayer.createBot({
-    host: config.server.ip,
-    port: config.server.port,
-    username: config['bot-account'].username,
-    password: config['bot-account'].password || undefined,
-    version: config.server.version,
-    auth: config['bot-account'].type
+    username: config.username,
+    password: config.password,
+    auth: config.auth,
+    host: config.host,
+    port: config.port,
+    version: config.version
   });
 
-  const { messages, repeat } = config.utils['chat-messages'];
-  const repeatDelay = config.utils['chat-messages']['repeat-delay'];
-  const autoReconnect = config.utils['auto-reconnect'];
-  const autoReconnectDelay = config.utils['auto-reconnect-delay'];
+  bot.once('spawn', () => {
+    console.log(`🤖 [BOT] ${config.username} joined the server`);
 
-  // When the bot spawns
-  bot.on('spawn', () => {
-    console.log('[INFO] Bot has joined the server.');
+    // 💬 Send random roast messages
+    setInterval(() => {
+      const msg = config.roastMessages[Math.floor(Math.random() * config.roastMessages.length)];
+      bot.chat(msg);
+      console.log(`[Chat] Sent: ${msg}`);
+    }, config.messageDelay * 1000);
 
-    // Anti-AFK feature
-    if (config.utils['anti-afk'].enabled) {
-      setInterval(() => {
-        bot.setControlState('sneak', true);
-        setTimeout(() => bot.setControlState('sneak', false), 1000);
-      }, 60000); // Sneak every 60 seconds
-    }
-
-    // Send random roast messages
-    if (config.utils['chat-messages'].enabled && repeat) {
-      setTimeout(function sendRandomMessage() {
-        const randomMessage = messages[Math.floor(Math.random() * messages.length)];
-        bot.chat(randomMessage);
-        setTimeout(sendRandomMessage, repeatDelay * 1000);
-      }, 10000); // Wait 10s before first message
-    }
+    // ⏰ Leave after stayDuration
+    setTimeout(() => {
+      console.log(`[INFO] ${config.username} leaving the server after ${config.stayDuration / 1000}s...`);
+      bot.quit('AFK timer ended');
+    }, config.stayDuration);
   });
 
-  // Chat log
-  if (config.utils['chat-log']) {
-    bot.on('chat', (username, message) => {
-      console.log(`[CHAT] <${username}> ${message}`);
-    });
-  }
-
-  // Handle kick/disconnects
-  bot.on('kicked', (reason) => {
-    console.log(`[KICKED] ${reason}`);
-    if (autoReconnect) {
-      console.log(`[INFO] Bot disconnected. Rejoining in ${autoReconnectDelay}ms...`);
-      setTimeout(createBot, autoReconnectDelay);
-    }
-  });
-
-  bot.on('error', (err) => {
-    console.log(`[ERROR] ${err.message}`);
-    if (autoReconnect) {
-      console.log(`[INFO] Bot crashed. Rejoining in ${autoReconnectDelay}ms...`);
-      setTimeout(createBot, autoReconnectDelay);
-    }
-  });
-
+  // 🔁 Auto Reconnect
   bot.on('end', () => {
-    console.log('[INFO] Connection ended.');
-    if (autoReconnect) {
-      console.log(`[INFO] Attempting to reconnect in ${autoReconnectDelay}ms...`);
-      setTimeout(createBot, autoReconnectDelay);
-    }
+    console.log(`[INFO] Bot disconnected. Rejoining in ${config.rejoinDelay / 1000}s...`);
+    setTimeout(createBot, config.rejoinDelay);
   });
+
+  bot.on('kicked', (reason) => console.log(`[KICKED] ${reason}`));
+  bot.on('error', (err) => console.log(`[ERROR] ${err.message}`));
 }
 
 createBot();
