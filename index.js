@@ -10,7 +10,7 @@ app.listen(PORT, () => console.log(`✅ Server started on port ${PORT}`));
 // CONFIGURATION
 // ==========================
 const config = {
-  username: "24/7RoasterXXX",
+  username: "RoasterXXX",
   password: "",
   auth: "mojang",
   host: "HOGAKING.aternos.me",
