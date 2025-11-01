@@ -4,47 +4,53 @@
     "password": "",
     "type": "mojang"
   },
+
   "server": {
     "ip": "HOGAKING.aternos.me",
     "port": 19754,
     "version": "1.12.1"
   },
+  
   "position": {
     "enabled": false,
     "x": 0,
     "y": 0,
     "z": 0
   },
+
   "utils": {
     "auto-auth": {
       "enabled": false,
       "password": ""
     },
+
     "anti-afk": {
       "enabled": true,
       "sneak": true
     },
+
     "chat-messages": {
       "enabled": true,
       "repeat": true,
       "repeat-delay": 60,
       "messages": [
-        "While you were buying realms, I was buying knowledge!",
-        "Call me server admin, because I technically am!",
-        "You spent 20k on games, I spent 0 but still win!",
-        "24/7 online unlike some people's IQ!",
-        "You paid 20k in game, I paid 0 for brain!",
-        "Bro bought a realm and still can't buy skill!",
-        "Not paid to win, just coded to rule!",
-        "Imagine paying for Realms just to get carried by a bot!",
-        "Keep spending money, I’ll keep owning servers for free!",
-        "This bot runs smoother than your gameplay!",
-        "Still waiting for someone to match my IQ level!",
-        "Imagine paying for lag!"
+        "While you were buying realms, I was buying knowledge😎",
+        "Call me server admin, because I technically am🤣🤣",
+        "You spent ₹20k on games, I spent ₹0 but still win💀",
+        "24/7 online unlike some people's IQ💀🤣",
+        "You paid ₹20k in game, I paid ₹0 for brain🧠🤯💀",
+        "Bro bought a realm and still can't buy skill💀",
+        "Not paid to win, just coded to rule🔥",
+        "Imagine paying for Realms just to get carried by a bot 💀",
+        "Keep spending money, I’ll keep owning servers for free 💪",
+        "This bot runs smoother than your gameplay 💀",
+        "Still waiting for someone to match my IQ level ⏳",
+        "Imagine paying for lag💀"
       ]
     },
+
     "chat-log": true,
     "auto-reconnect": true,
     "auto-recconect-delay": 10000
   }
-}
+    }
