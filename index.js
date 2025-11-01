@@ -1,9 +1,8 @@
 const mineflayer = require('mineflayer');
-const { pathfinder, Movements, goals: { GoalBlock } } = require('mineflayer-pathfinder');
+const { Movements, pathfinder, goals: { GoalBlock } } = require('mineflayer-pathfinder');
 const express = require('express');
 const config = require('./settings.json');
 
-// Express web server (for uptime)
 const app = express();
 app.get('/', (req, res) => res.send('Bot is running 24/7!'));
 const PORT = process.env.PORT || 8000;
@@ -25,49 +24,52 @@ function createBot() {
   bot.settings.colorsEnabled = false;
 
   bot.once('spawn', () => {
-    console.log('\x1b[33m[AfkBot] Bot joined the server\x1b[0m');
+    console.log('[AfkBot] Bot joined the server.');
+
+    // 🕒 Stay for 70 seconds then leave
+    setTimeout(() => {
+      console.log('[INFO] 70 seconds over, bot leaving...');
+      bot.quit('AFK timer ended');
+    }, 70000);
 
     // 💬 Chat messages
     if (config.utils['chat-messages'].enabled) {
+      console.log('[INFO] Started chat-messages module');
       const messages = config.utils['chat-messages']['messages'];
-      const delay = config.utils['chat-messages']['repeat-delay'];
-      let i = 0;
-
-      setInterval(() => {
-        bot.chat(messages[i]);
-        i = (i + 1) % messages.length;
-      }, delay * 1000);
+      if (config.utils['chat-messages'].repeat) {
+        const delay = config.utils['chat-messages']['repeat-delay'];
+        let i = 0;
+        setInterval(() => {
+          bot.chat(messages[i]);
+          i = (i + 1) % messages.length;
+        }, delay * 1000);
+      } else {
+        messages.forEach(msg => bot.chat(msg));
+      }
     }
 
-    // 🧍 Anti-AFK system
+    // 🧍 Anti-AFK movement
     if (config.utils['anti-afk'].enabled) {
       setInterval(() => {
         bot.setControlState('jump', true);
         setTimeout(() => bot.setControlState('jump', false), 500);
-
         if (config.utils['anti-afk'].sneak) {
           bot.setControlState('sneak', true);
           setTimeout(() => bot.setControlState('sneak', false), 1000);
         }
       }, 30000);
     }
-
-    // 🕒 Leave after 70 seconds
-    setTimeout(() => {
-      console.log('[INFO] 70 seconds over, bot leaving...');
-      bot.quit('AFK timer ended');
-    }, 70000);
   });
 
-  // 🔁 Auto reconnect
+  // 🔁 Auto reconnect handler
   if (config.utils['auto-reconnect']) {
     bot.on('end', () => {
-      console.log(`[INFO] Bot disconnected. Rejoining in ${config.utils['auto-recconect-delay']} ms...`);
-      setTimeout(createBot, config.utils['auto-recconect-delay']);
+      console.log(`[INFO] Bot disconnected. Rejoining in ${config.utils['auto-reconnect-delay']} ms...`);
+      setTimeout(createBot, config.utils['auto-reconnect-delay']);
     });
   }
 
-  bot.on('kicked', reason => console.log(`[KICKED] ${reason}`));
+  bot.on('kicked', reason => console.log(`[AfkBot] Kicked: ${reason}`));
   bot.on('error', err => console.log(`[ERROR] ${err.message}`));
 }
 
