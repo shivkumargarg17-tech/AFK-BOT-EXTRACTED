@@ -7,14 +7,9 @@ const config = require('./settings.json');
 const express = require('express');
 
 const app = express();
-app.get('/', (req, res) => {
-  res.send('Bot is alive and roasting 😎');
-});
-
+app.get('/', (req, res) => res.send('Bot is running 24/7!'));
 const PORT = process.env.PORT || 8000;
-app.listen(PORT, () => {
-  console.log(`Server started on port ${PORT}`);
-});
+app.listen(PORT, () => console.log(`Server started on port ${PORT}`));
 
 function createBot() {
   const bot = mineflayer.createBot({
@@ -23,7 +18,7 @@ function createBot() {
     auth: config['bot-account']['type'],
     host: config.server.ip,
     port: config.server.port,
-    version: config.server.version,
+    version: config.server.version
   });
 
   bot.loadPlugin(pathfinder);
@@ -31,10 +26,49 @@ function createBot() {
   const defaultMove = new Movements(bot, mcData);
   bot.settings.colorsEnabled = false;
 
+  // When bot joins
   bot.once('spawn', () => {
     console.log('\x1b[33m[AfkBot] Bot joined the server\x1b[0m');
 
-    // ⏱ Stay 70 seconds then leave
+    // 💬 Auto chat messages
+    if (config.utils['chat-messages'].enabled) {
+      const messages = config.utils['chat-messages']['messages'];
+      const delay = config.utils['chat-messages']['repeat-delay'];
+      let i = 0;
+
+      setInterval(() => {
+        bot.chat(messages[i]);
+        i = (i + 1) % messages.length;
+      }, delay * 1000);
+    }
+
+    // 🧍 Anti-AFK system
+    if (config.utils['anti-afk'].enabled) {
+      setInterval(() => {
+        bot.setControlState('jump', true);
+        setTimeout(() => bot.setControlState('jump', false), 500);
+
+        if (config.utils['anti-afk'].sneak) {
+          bot.setControlState('sneak', true);
+          setTimeout(() => bot.setControlState('sneak', false), 1000);
+        }
+      }, 30000); // Move every 30 seconds
+    }
+  });
+
+  // 🧠 Auto reconnect if disconnected
+  if (config.utils['auto-reconnect']) {
+    bot.on('end', () => {
+      console.log(`[INFO] Bot disconnected. Reconnecting in ${config.utils['auto-recconect-delay']}ms...`);
+      setTimeout(createBot, config.utils['auto-recconect-delay']);
+    });
+  }
+
+  bot.on('kicked', (reason) => console.log(`[KICKED] ${reason}`));
+  bot.on('error', (err) => console.log(`[ERROR] ${err.message}`));
+}
+
+createBot();    // ⏱ Stay 70 seconds then leave
     setTimeout(() => {
       console.log('[INFO] 70 seconds over, bot leaving...');
       bot.quit('AFK timer ended');
