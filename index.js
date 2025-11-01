@@ -1,52 +1,47 @@
 const mineflayer = require('mineflayer');
-const { Movements, pathfinder, goals: { GoalBlock } } = require('mineflayer-pathfinder');
-const express = require('express');
+const { pathfinder, Movements } = require('mineflayer-pathfinder');
 const config = require('./settings.json');
+const express = require('express');
 
 const app = express();
 app.get('/', (req, res) => res.send('Bot is running 24/7!'));
 const PORT = process.env.PORT || 8000;
 app.listen(PORT, () => console.log(`Server started on port ${PORT}`));
 
-// Global counter for rotating roast messages (won’t reset after reconnect)
-if (global.messageIndex === undefined) global.messageIndex = 0;
-
 function createBot() {
   const bot = mineflayer.createBot({
-    username: config['bot-account']['username'],
-    password: config['bot-account']['password'],
-    auth: config['bot-account']['type'],
+    username: config["bot-account"].username,
+    password: config["bot-account"].password,
+    auth: config["bot-account"].type,
     host: config.server.ip,
     port: config.server.port,
     version: config.server.version
   });
 
   bot.loadPlugin(pathfinder);
-  const mcData = require('minecraft-data')(bot.version);
-  const defaultMove = new Movements(bot, mcData);
   bot.settings.colorsEnabled = false;
 
   bot.once('spawn', () => {
-    console.log('\x1b[33m[AfkBot] Bot joined the server\x1b[0m');
+    console.log('\x1b[33m[RoasterBot] Bot joined the server!\x1b[0m');
 
-    // 🧠 Auto chat messages
-    if (config.utils['chat-messages'].enabled) {
-      const messages = config.utils['chat-messages']['messages'];
-      const delay = config.utils['chat-messages']['repeat-delay'];
+    // 🧠 Send random roast messages
+    if (config.utils["chat-messages"].enabled) {
+      const messages = config.utils["chat-messages"].messages;
+      const delay = config.utils["chat-messages"]["repeat-delay"];
 
       setInterval(() => {
-        bot.chat(messages[global.messageIndex]);
-        global.messageIndex = (global.messageIndex + 1) % messages.length;
+        const randomMessage = messages[Math.floor(Math.random() * messages.length)];
+        bot.chat(randomMessage);
       }, delay * 1000);
     }
 
-    // 🧍 Anti-AFK (jump + sneak)
-    if (config.utils['anti-afk'].enabled) {
+    // 🚶 Anti-AFK movement
+    if (config.utils["anti-afk"].enabled) {
       setInterval(() => {
         bot.setControlState('jump', true);
         setTimeout(() => bot.setControlState('jump', false), 500);
 
-        if (config.utils['anti-afk'].sneak) {
+        if (config.utils["anti-afk"].sneak) {
           bot.setControlState('sneak', true);
           setTimeout(() => bot.setControlState('sneak', false), 1000);
         }
@@ -56,18 +51,19 @@ function createBot() {
     // ⏱ Leave after 70 seconds
     setTimeout(() => {
       console.log('[INFO] 70 seconds over, bot leaving...');
-      bot.quit('AFK timer ended');
+      bot.quit('Roaster cooldown');
     }, 70000);
   });
 
-  // 🔁 Auto reconnect after disconnect
-  if (config.utils['auto-reconnect']) {
-    bot.on('end', () => {
-      console.log(`[INFO] Bot disconnected. Reconnecting in ${config.utils['auto-recconect-delay']}ms...`);
-      setTimeout(createBot, config.utils['auto-recconect-delay']);
-    });
-  }
+  // 🔁 Auto reconnect system
+  bot.on('end', () => {
+    if (config.utils["auto-reconnect"]) {
+      console.log(`[INFO] Bot disconnected. Rejoining in ${config.utils["auto-reconnect-delay"]}ms...`);
+      setTimeout(createBot, config.utils["auto-reconnect-delay"]);
+    }
+  });
 
+  // 🧱 Log errors & kicks
   bot.on('kicked', reason => console.log(`[KICKED] ${reason}`));
   bot.on('error', err => console.log(`[ERROR] ${err.message}`));
 }
