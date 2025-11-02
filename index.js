@@ -1,80 +1,89 @@
-// ============================================
-// Roaster Bot — "CodedByLegend"
-// 24/7 Minecraft AFK + Roast Bot
-// Works with Render + UptimeRobot
-// Auto reconnects, walks randomly, and chats desi style
-// ============================================
-
 const mineflayer = require('mineflayer');
 const express = require('express');
+const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
+const { GoalNear } = goals;
 
-// Web server for Render & UptimeRobot to keep it 24/7 online
 const app = express();
-app.get('/', (req, res) => res.send('Roaster Bot by Legend is ALIVE'));
-app.listen(3000, () => console.log('Web server started — ready for UptimeRobot'));
+const PORT = process.env.PORT || 3000;
 
-// Bot options
-const botOptions = {
-  host: 'your.server.ip',   // Replace with your Minecraft server IP
-  port: 25565,              // Change port if different
-  username: 'CodedByLegend', // Bot’s name
-  version: '1.21.1'         // Match your server version
-};
+// =========================
+// KEEP ALIVE WEB SERVER
+// =========================
+app.get('/', (req, res) => {
+  res.send('Minecraft Bot is alive - CodedByLegend');
+});
+app.listen(PORT, () => {
+  console.log(`Web server running on port ${PORT}`);
+});
 
-// Start function
+// =========================
+// BOT START FUNCTION
+// =========================
 function startBot() {
-  const bot = mineflayer.createBot(botOptions);
+  const bot = mineflayer.createBot({
+    host: 'HOGAKING.aternos.me',
+    port: 19754,
+    username: 'CodedByLegend',
+    version: '1.21.1'
+  });
 
-  // When bot joins
-  bot.once('spawn', () => {
-    console.log('Bot has joined the server successfully.');
-    bot.chat('Aa gaya mai — CodedByLegend');
+  bot.loadPlugin(pathfinder);
 
-    // Move randomly every 1 second to avoid AFK kick
+  bot.on('login', () => {
+    console.log('Bot joined the server successfully!');
+    bot.chat('CodedByLegend aa gaya server pe!');
+  });
+
+  bot.on('spawn', () => {
+    console.log('Bot spawned and moving randomly every second!');
+    const mcData = require('minecraft-data')(bot.version);
+    const defaultMove = new Movements(bot, mcData);
+
     setInterval(() => {
-      const x = bot.entity.position.x + (Math.random() - 0.5) * 2;
-      const z = bot.entity.position.z + (Math.random() - 0.5) * 2;
-      bot.lookAt({ x, y: bot.entity.position.y, z });
-      bot.setControlState('forward', true);
-      setTimeout(() => bot.setControlState('forward', false), 500);
+      if (!bot.entity) return;
+      const x = bot.entity.position.x + (Math.random() * 10 - 5);
+      const z = bot.entity.position.z + (Math.random() * 10 - 5);
+      bot.pathfinder.setMovements(defaultMove);
+      bot.pathfinder.setGoal(new GoalNear(x, bot.entity.position.y, z, 1));
     }, 1000);
   });
 
-  // Chat replies + Indian roast mode
-  const roasts = [
-    'Abe chup kar, mai server ka owner hu',
-    'Tere jese to mai lunch break me harata hu',
-    'Ping dekh zara, tujhe to lag hi kha gaya',
-    'Server mera, rules bhi mere',
-    'Beta padhai likhai karo, Minecraft baad me',
-    'Abe hacker nahi hu, bas smart hu',
-    'Lagta hai tu apne base me obsidian se zyada slow hai',
-    'Apne level pe rehna seekh bhai',
-    'Yaha mai afk bhi raho to tu mar jaata hai',
-    'Legend naam hai mera, roasting ka kaam hai mera'
-  ];
-
   bot.on('chat', (username, message) => {
     if (username === bot.username) return;
+    const msg = message.toLowerCase();
 
-    if (message.toLowerCase().includes('bot')) {
-      const roast = roasts[Math.floor(Math.random() * roasts.length)];
-      bot.chat(roast);
-    }
+    // DESI ROASTING LINES 🔥
+    const roasts = [
+      "Bhai tu bolta kam, karta zyada kar!",
+      "Aree bhai, teri speed to turtle se bhi kam hai!",
+      "Server bhi sochta hoga, isko kyu join karaya!",
+      "Jyada hawa mein mat ud, net ka ping yaad rakh!",
+      "Legend ke samne bakchodi allowed nahi bhai!"
+    ];
 
-    if (message.toLowerCase().includes('hi') || message.toLowerCase().includes('hello')) {
-      bot.chat(`Yo ${username}, kya haal hai bhai`);
+    if (msg.includes('hello') || msg.includes('hi')) {
+      bot.chat(`Kya haal hai ${username}?`);
+    } else if (msg.includes('roast')) {
+      const line = roasts[Math.floor(Math.random() * roasts.length)];
+      bot.chat(line);
+    } else if (msg.includes('owner')) {
+      bot.chat('Server ka asli owner HOGAKING hai!');
+    } else if (msg.includes('bye')) {
+      bot.chat(`Chal ${username}, milte hain agli baar!`);
     }
   });
 
-  // Auto reconnect on kick or error
   bot.on('end', () => {
     console.log('Bot disconnected. Reconnecting in 10 seconds...');
     setTimeout(startBot, 10000);
   });
 
-  bot.on('error', err => {
-    console.log('Error:', err);
+  bot.on('kicked', (reason) => {
+    console.log(`Kicked: ${reason}`);
+  });
+
+  bot.on('error', (err) => {
+    console.log(`Error: ${err.message}`);
   });
 }
 
