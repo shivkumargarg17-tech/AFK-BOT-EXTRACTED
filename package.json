@@ -1,15 +1,15 @@
 {
-  "name": "roaster-bot",
-  "version": "3.1.0",
-  "description": "Minecraft AFK + Roast bot — coded by Legend",
+  "name": "minecraft-afk-bot",
+  "version": "2.2",
+  "description": "AFK bot for Minecraft servers.",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
-  "author": "CodedByLegend",
+  "author": "HOGAKING",
   "license": "MIT",
   "dependencies": {
     "express": "^4.18.2",
-    "mineflayer": "github:PrismarineJS/mineflayer"
+    "mineflayer": "^4.20.0"
   }
 }
