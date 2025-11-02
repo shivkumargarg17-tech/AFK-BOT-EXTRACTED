@@ -1,81 +1,81 @@
-// ───────────────────────────────────────────────
-// Minecraft AFK Bot "CodedByLegend"
-// Coded by Legend 💪
-// Keeps Aternos server alive 24/7 with UptimeRobot + Render
-// Auto reconnects, moves every second, and throws random Indian roast lines 😎
-// Works even if server is on 1.21.1 using ViaBackwards (fake version 1.20.4)
-// ───────────────────────────────────────────────
+// ============================================
+// Roaster Bot — "CodedByLegend"
+// 24/7 Minecraft AFK + Roast Bot
+// Works with Render + UptimeRobot
+// Auto reconnects, walks randomly, and chats desi style
+// ============================================
 
 const mineflayer = require('mineflayer');
-const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const express = require('express');
 
+// Web server for Render & UptimeRobot to keep it 24/7 online
 const app = express();
-app.get('/', (req, res) => res.send('✅ Bot is running — CodedByLegend!'));
-app.listen(3000, () => console.log('🌐 Express server started for UptimeRobot ping!'));
+app.get('/', (req, res) => res.send('Roaster Bot by Legend is ALIVE'));
+app.listen(3000, () => console.log('Web server started — ready for UptimeRobot'));
 
-function createBot() {
-  const bot = mineflayer.createBot({
-    host: "HOGAKING.aternos.me", // ⚙️ Replace with your Aternos server IP
-    port: 19754, // ⚙️ Replace with your Aternos server port
-    username: "CodedByLegend", // 👑 Bot username
-    version: "1.20.4", // 🎮 Fake version for 1.21.1 servers with ViaBackwards
-  });
+// Bot options
+const botOptions = {
+  host: 'your.server.ip',   // Replace with your Minecraft server IP
+  port: 25565,              // Change port if different
+  username: 'CodedByLegend', // Bot’s name
+  version: '1.21.1'         // Match your server version
+};
 
-  // Load pathfinder for movement
-  bot.loadPlugin(pathfinder);
+// Start function
+function startBot() {
+  const bot = mineflayer.createBot(botOptions);
 
+  // When bot joins
   bot.once('spawn', () => {
-    console.log(`[BOT] Joined server successfully as ${bot.username} ✅`);
+    console.log('Bot has joined the server successfully.');
+    bot.chat('Aa gaya mai — CodedByLegend');
 
-    // Movement setup
-    const mcData = require('minecraft-data')(bot.version);
-    const defaultMove = new Movements(bot, mcData);
-    bot.pathfinder.setMovements(defaultMove);
-
-    // Move randomly every 1 second to prevent AFK kick
+    // Move randomly every 1 second to avoid AFK kick
     setInterval(() => {
       const x = bot.entity.position.x + (Math.random() - 0.5) * 2;
       const z = bot.entity.position.z + (Math.random() - 0.5) * 2;
-      const y = bot.entity.position.y;
-      bot.pathfinder.setGoal(new goals.GoalBlock(Math.floor(x), Math.floor(y), Math.floor(z)));
+      bot.lookAt({ x, y: bot.entity.position.y, z });
+      bot.setControlState('forward', true);
+      setTimeout(() => bot.setControlState('forward', false), 500);
     }, 1000);
-
-    // Random Indian roast lines (family-friendly 😄)
-    const roasts = [
-      "Bhai tu to legend nikla 😎",
-      "Arey bhai zyada pro mat ban! 😂",
-      "Server ka owner mai hoon 😏",
-      "Tu khel, mai AFK sambhalta hoon 😤",
-      "Ping low, attitude high 💀",
-      "Lag hua kya? Nahi bro, tera net gaya! 🤣",
-      "Aaja 1v1 kar le, dekhte hain kaun king hai 👑",
-      "Server sambhal mere bina tut jayega 💪",
-      "AFK nahi hoon, bas soch raha hoon 😴",
-      "Coding aur roasting dono me top level 🔥"
-    ];
-
-    // Send random roast message every 60 seconds
-    setInterval(() => {
-      const msg = roasts[Math.floor(Math.random() * roasts.length)];
-      bot.chat(msg);
-    }, 60000);
   });
 
-  // Handle disconnections and reconnect automatically
+  // Chat replies + Indian roast mode
+  const roasts = [
+    'Abe chup kar, mai server ka owner hu',
+    'Tere jese to mai lunch break me harata hu',
+    'Ping dekh zara, tujhe to lag hi kha gaya',
+    'Server mera, rules bhi mere',
+    'Beta padhai likhai karo, Minecraft baad me',
+    'Abe hacker nahi hu, bas smart hu',
+    'Lagta hai tu apne base me obsidian se zyada slow hai',
+    'Apne level pe rehna seekh bhai',
+    'Yaha mai afk bhi raho to tu mar jaata hai',
+    'Legend naam hai mera, roasting ka kaam hai mera'
+  ];
+
+  bot.on('chat', (username, message) => {
+    if (username === bot.username) return;
+
+    if (message.toLowerCase().includes('bot')) {
+      const roast = roasts[Math.floor(Math.random() * roasts.length)];
+      bot.chat(roast);
+    }
+
+    if (message.toLowerCase().includes('hi') || message.toLowerCase().includes('hello')) {
+      bot.chat(`Yo ${username}, kya haal hai bhai`);
+    }
+  });
+
+  // Auto reconnect on kick or error
   bot.on('end', () => {
-    console.log('[INFO] Bot disconnected. Reconnecting in 15 seconds...');
-    setTimeout(createBot, 15000);
+    console.log('Bot disconnected. Reconnecting in 10 seconds...');
+    setTimeout(startBot, 10000);
   });
 
-  bot.on('kicked', (reason) => {
-    console.log(`[KICKED] ${reason}`);
-  });
-
-  bot.on('error', (err) => {
-    console.log(`[ERROR] ${err.message}`);
+  bot.on('error', err => {
+    console.log('Error:', err);
   });
 }
 
-// Start the bot
-createBot();
+startBot();
