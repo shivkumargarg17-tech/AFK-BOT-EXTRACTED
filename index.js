@@ -79,3 +79,11 @@ function reconnect() {
 }
 bot.on('end', reconnect);
 bot.on('kicked', reconnect);
+// 🕒 Self ping every 4 minutes to keep Render alive and prevent sleep
+const fetch = (...args) => import('node-fetch').then(({ default: fetch }) => fetch(...args));
+
+setInterval(() => {
+  fetch('https://afk-bot-extracted-for-render.onrender.com/')
+    .then(() => console.log('✅ Self-ping sent to keep Render awake'))
+    .catch(() => console.log('⚠️ Self-ping failed'));
+}, 240000); // 240000 ms = 4 minutes
