@@ -1,79 +1,82 @@
-// 💻 Minecraft AFK Roaster Bot
-// 👑 Coded By Legend — stable + anti-timeout + 24/7 uptime
+// Minecraft AFK + Roaster Bot
+// Name: CodedByLegend
+// Coded by Legend 😎
 
 const mineflayer = require('mineflayer');
+const { pathfinder, Movements, goals } = require('mineflayer-pathfinder');
 const express = require('express');
-
 const app = express();
-const port = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3000;
 
-// Keep-alive web server (for Render/UptimeRobot)
-app.get('/', (req, res) => res.send('✅ Roaster bot is alive — CodedByLegend'));
-app.listen(port, () => console.log(`[WEB] Online at port ${port}`));
+// 🟢 Keep Render app alive
+app.get('/', (req, res) => res.send('Bot is running 24/7 🚀'));
+app.listen(PORT, () => console.log(`Web server running on port ${PORT}`));
 
-function startBot() {
-  const bot = mineflayer.createBot({
-    host: 'HOGAKING.aternos.me', // your Aternos IP (without https://)
-    port: 19754,                 // server port
-    username: 'CodedByLegend',   // bot name
-    version: '1.21.1',           // Minecraft version
-  });
+// 🧠 Server & Bot Info
+const botInfo = {
+  host: 'YOUR_SERVER_IP_HERE', // example: 'play.example.aternos.me'
+  port: 25565,                 // your server port
+  username: 'CodedByLegend',
+  version: '1.21'              // force version close to 1.21.10
+};
+
+// 💬 Some Indian-style roasts
+const roasts = [
+  "Bhai tu khelta kam aur mar khata zyada hai 💀",
+  "Server me aa gaya main, ab tu gaya 😎",
+  "Lagta hai tu creative me bhi mar jata hoga 😂",
+  "Bro ke paas armor hai par skills gayab 😭",
+  "Legend joined — noobs run for your life 💨",
+  "Aree bhai tu to XP bhi chhod ke bhag gaya 🤣",
+  "Ye kya speedrun kar raha ya comedy show? 🤔",
+  "Bot hu par tera aim se accha mera hai 😏"
+];
+
+// 🧍 Create the bot
+function createBot() {
+  const bot = mineflayer.createBot(botInfo);
+  bot.loadPlugin(pathfinder);
 
   bot.once('spawn', () => {
-    console.log('[BOT] Joined server successfully as CodedByLegend ✅');
+    console.log(`[BOT] Joined server successfully as ${botInfo.username}`);
+    startMoving(bot);
+    roastLoop(bot);
+  });
 
-    // 🔁 Move slightly every second to avoid AFK timeout
+  // Send roasts every 30–60 seconds randomly
+  function roastLoop(bot) {
     setInterval(() => {
-      try {
-        const yaw = Math.random() * Math.PI * 2;
-        bot.look(yaw, 0, true);
-        bot.setControlState('forward', true);
-        bot.setControlState('jump', true);
-        setTimeout(() => {
-          bot.setControlState('forward', false);
-          bot.setControlState('jump', false);
-        }, 500);
-      } catch (err) {
-        console.log('[WARN] Movement loop error:', err.message);
-      }
+      const msg = roasts[Math.floor(Math.random() * roasts.length)];
+      bot.chat(msg);
+    }, Math.floor(Math.random() * 30000) + 30000);
+  }
+
+  // Move every 1 second randomly
+  function startMoving(bot) {
+    const mcData = require('minecraft-data')(bot.version);
+    const defaultMove = new Movements(bot, mcData);
+    bot.pathfinder.setMovements(defaultMove);
+
+    setInterval(() => {
+      const x = bot.entity.position.x + (Math.random() * 4 - 2);
+      const z = bot.entity.position.z + (Math.random() * 4 - 2);
+      const y = bot.entity.position.y;
+      bot.pathfinder.setGoal(new goals.GoalBlock(x, y, z));
     }, 1000);
+  }
 
-    // 🎯 Random roast every 25 seconds
-    const roasts = [
-      "Bhai tu toh respawn expert nikla!",
-      "Lag nahi bhai, skill issue 😭",
-      "Tu mobile pe khelta hai na? Dikh raha hai 😆",
-      "Armor pehna bhi tha kya?",
-      "Server ke liye AFK, roasting ke liye 24/7 active 💪",
-      "Main bot hoon, tu bhi lagta hai auto-mode me hai 😜",
-      "Minecraft bhi tujhe dekh ke sad ho gaya 💀",
-      "Bro sochta hai pro hai, par villagers bhi has rahe hain 😂"
-    ];
-
-    setInterval(() => {
-      try {
-        const roast = roasts[Math.floor(Math.random() * roasts.length)];
-        bot.chat(roast);
-      } catch (err) {
-        console.log('[WARN] Chat error:', err.message);
-      }
-    }, 25000);
+  bot.on('kicked', (reason) => {
+    console.log(`[KICKED] ${reason}`);
   });
 
   bot.on('error', (err) => {
-    console.log('[ERROR]', err.code || err.message);
-    if (err.code === 'ECONNRESET' || err.code === 'ETIMEDOUT') {
-      console.log('[INFO] Connection reset — retrying in 10s...');
-      setTimeout(startBot, 10000);
-    }
+    console.log(`[ERROR] ${err}`);
   });
 
   bot.on('end', () => {
-    console.log('[INFO] Bot disconnected. Reconnecting in 10s...');
-    setTimeout(startBot, 10000);
+    console.log(`[INFO] Bot disconnected. Reconnecting in 10 seconds...`);
+    setTimeout(createBot, 10000);
   });
-
-  bot.on('kicked', (reason) => console.log('[KICKED]', reason));
 }
 
-startBot();
+createBot();
