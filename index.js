@@ -14,26 +14,26 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Web server listening on port ${PORT}`));
 
 // --- Minecraft connection settings (already set to your server) ---
-const MINECRAFT_HOST = 'HOGAKING.aternos.me';
-const MINECRAFT_PORT = 19754;
+const MINECRAFT_HOST = 'golpoFC.aternos.me';
+const MINECRAFT_PORT = 20622;
 const BOT_USERNAME = 'CodedByLegend';
 
 // --- Roast lines (no emojis) ---
 const roastLines = [
-  "Bhai tu to creeper se bhi kam dhamaka karta hai.",
-  "Aree bhai tu chal raha hai ya server lag ho gaya?",
-  "Tere aim dekh ke skeleton bhi sharma jaaye.",
-  "Tu maarne gaya tha ya selfie lene?",
-  "Tere move dekh ke lagta hai Wi-Fi dukaan se liya hai.",
-  "Bro tu fight karta hai ya yoga kar raha hai?",
-  "Tere jaise players ke liye respawn invent kiya gaya tha.",
-  "Tu marne ke baad bhi excuse ready rakhta hai kya?",
-  "Aree bhai tu mining kar raha hai ya chhup-chhup ke rotis paka raha hai?",
-  "Server ne bhi kaha — isko kick karo, ye AFK nahi, slow hai!",
-  "Tere piche zombie bhi keh rahe the — 'isse door rehna bhai!'",
-  "Tere speed dekh ke ghoda bhi soch raha hai chhod yaar.",
-  "Tu diamond ke sapne dekhta hai, cobblestone milta hai.",
-  "Bhai tu Nether jaane layak nahi, ghar sambhal pehle."
+  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
+  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
+  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!,
+  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
+  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
+  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
+  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
+  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
+  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
+  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
+  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
+  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
+  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
+  "I HAD SOME ROAST MESSAGES IN HINDI BUT KIRA DISABLED IT SO YOU GUYS DONT KICK ME AND ALSO FORGOT TO TELL YOU, I CAN AUTO REJOIN"
 ];
 
 // --- Create bot function (so we can reconnect cleanly) ---
