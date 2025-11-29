@@ -14,8 +14,8 @@ const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => console.log(`Web server listening on port ${PORT}`));
 
 // --- Minecraft connection settings (already set to your server) ---
-const MINECRAFT_HOST = 'golpoFC.aternos.me';
-const MINECRAFT_PORT = 20622;
+const MINECRAFT_HOST = 'SURVIVALSMP674.aternos.me';
+const MINECRAFT_PORT = 45544;
 const BOT_USERNAME = 'CodedByLegend';
 
 // --- Roast lines (no emojis) ---
