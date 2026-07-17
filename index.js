@@ -7,14 +7,6 @@ const settings = require('./settings.json');
 const app = express();
 const webPort = Number(process.env.PORT || 10000);
 
-app.get('/', (_req, res) => {
-  res.send('Minecraft AFK bot service is running.');
-});
-
-app.listen(webPort, () => {
-  console.log(`[WEB] Listening on port ${webPort}`);
-});
-
 const account = settings['bot-account'] || {};
 const server = settings.server || {};
 const utils = settings.utils || {};
@@ -29,7 +21,7 @@ const reconnectDelayMs = Math.max(
 );
 const connectTimeoutMs = Math.max(
   20000,
-  Number(utils['connect-timeout'] || 35) * 1000
+  Number(utils['connect-timeout'] || 45) * 1000
 );
 const keepAliveTimeoutMs = Math.max(
   60000,
@@ -41,13 +33,21 @@ let reconnectTimer;
 let connectWatchdog;
 let isConnecting = false;
 const botTimers = new Set();
+const actionCounts = { move: 0, jump: 0, crouch: 0, punch: 0 };
 
-const actionCounts = {
-  move: 0,
-  jump: 0,
-  crouch: 0,
-  punch: 0
-};
+app.get('/', (_req, res) => {
+  res.json({
+    service: 'Minecraft AFK bot',
+    connected: Boolean(bot?.player),
+    connecting: isConnecting,
+    username: account.username || 'AfkBotByAkshit',
+    server: server.ip || null
+  });
+});
+
+app.listen(webPort, () => {
+  console.log(`[WEB] Listening on port ${webPort}`);
+});
 
 function randomNumber(min, max) {
   return Math.random() * (max - min) + min;
@@ -65,12 +65,41 @@ function clampChance(value, fallback) {
   return Math.min(1, Math.max(0, parsed));
 }
 
+function configuredServer() {
+  const host = String(server.ip || '').trim();
+  const configuredPort = Number(server.port);
+  const useSrv = server['use-srv'] !== false && /\.aternos\.me$/i.test(host);
+
+  return {
+    host,
+    configuredPort,
+    useSrv,
+    username: String(account.username || 'AfkBotByAkshit').trim(),
+    version: String(server.version || '').trim()
+  };
+}
+
+function validServerConfig(config) {
+  if (!config.host) return false;
+  if (config.useSrv) return true;
+  return Number.isInteger(config.configuredPort) &&
+    config.configuredPort >= 1 && config.configuredPort <= 65535;
+}
+
+function formatReason(reason) {
+  if (typeof reason === 'string') return reason;
+  try {
+    return JSON.stringify(reason);
+  } catch {
+    return String(reason);
+  }
+}
+
 function scheduleBotTimer(callback, delayMs) {
   const timer = setTimeout(() => {
     botTimers.delete(timer);
     callback();
   }, delayMs);
-
   botTimers.add(timer);
   return timer;
 }
@@ -83,7 +112,7 @@ function clearBotTimers(activeBot = bot) {
     try {
       activeBot.clearControlStates();
     } catch {
-      // The connection may already be closed.
+      // The client may already be closed.
     }
   }
 }
@@ -91,33 +120,6 @@ function clearBotTimers(activeBot = bot) {
 function clearConnectWatchdog() {
   if (connectWatchdog) clearTimeout(connectWatchdog);
   connectWatchdog = undefined;
-}
-
-function formatReason(reason) {
-  if (typeof reason === 'string') return reason;
-  try {
-    return JSON.stringify(reason);
-  } catch {
-    return String(reason);
-  }
-}
-
-function configuredServer() {
-  return {
-    host: String(server.ip || '').trim(),
-    port: Number(server.port),
-    username: String(account.username || 'AfkBotByAkshit').trim(),
-    version: String(server.version || '1.21.11').trim()
-  };
-}
-
-function hasValidServerConfig(config) {
-  return Boolean(
-    config.host &&
-    Number.isInteger(config.port) &&
-    config.port >= 1 &&
-    config.port <= 65535
-  );
 }
 
 function isActiveBot(activeBot) {
@@ -141,7 +143,6 @@ function scheduleReconnect(delayMs = reconnectDelayMs) {
 
 function actionConfig(name, defaults) {
   const config = randomActions[name] || {};
-
   return {
     chance: clampChance(config.chance, defaults.chance),
     minDelay: Number(config['min-delay'] ?? defaults.minDelay),
@@ -154,7 +155,6 @@ function actionConfig(name, defaults) {
 function logAction(action, detail = '') {
   actionCounts[action] += 1;
   if (antiAfk['log-actions'] === false) return;
-
   const suffix = detail ? ` (${detail})` : '';
   console.log(`[ACTION] ${action}${suffix} | total=${actionCounts[action]}`);
 }
@@ -215,7 +215,6 @@ function scheduleJump(activeBot) {
       const durationMs = randomDelayMs(config.minDuration, config.maxDuration);
       activeBot.setControlState('jump', true);
       logAction('jump');
-
       scheduleBotTimer(() => {
         if (isActiveBot(activeBot)) activeBot.setControlState('jump', false);
       }, durationMs);
@@ -241,7 +240,6 @@ function scheduleCrouch(activeBot) {
       const durationMs = randomDelayMs(config.minDuration, config.maxDuration);
       activeBot.setControlState('sneak', true);
       logAction('crouch', `${(durationMs / 1000).toFixed(1)}s`);
-
       scheduleBotTimer(() => {
         if (isActiveBot(activeBot)) activeBot.setControlState('sneak', false);
       }, durationMs);
@@ -260,28 +258,20 @@ function schedulePunch(activeBot) {
 
   scheduleBotTimer(() => {
     if (!isActiveBot(activeBot)) return;
-
     if (Math.random() <= config.chance) {
       activeBot.swingArm('right');
       logAction('punch');
     }
-
     schedulePunch(activeBot);
   }, randomDelayMs(config.minDelay, config.maxDelay));
 }
 
 function scheduleActionSummary(activeBot) {
-  const summarySeconds = Math.max(
-    15,
-    Number(antiAfk['summary-interval'] || 60)
-  );
+  const summarySeconds = Math.max(15, Number(antiAfk['summary-interval'] || 60));
 
   scheduleBotTimer(() => {
     if (!isActiveBot(activeBot)) return;
-
-    const total = Object.values(actionCounts)
-      .reduce((sum, count) => sum + count, 0);
-
+    const total = Object.values(actionCounts).reduce((sum, count) => sum + count, 0);
     const ratio = Object.entries(actionCounts)
       .map(([action, count]) => {
         const percentage = total === 0 ? 0 : (count / total) * 100;
@@ -296,9 +286,7 @@ function scheduleActionSummary(activeBot) {
 
 function startRandomActions(activeBot) {
   if (!antiAfk.enabled || randomActions.enabled === false) return;
-
   for (const action of Object.keys(actionCounts)) actionCounts[action] = 0;
-
   scheduleMovement(activeBot);
   scheduleJump(activeBot);
   scheduleCrouch(activeBot);
@@ -308,9 +296,8 @@ function startRandomActions(activeBot) {
 
 function startChatMessages(activeBot) {
   const messages = Array.isArray(chatConfig.messages)
-    ? chatConfig.messages.filter(
-        message => typeof message === 'string' && message.trim().length > 0
-      )
+    ? chatConfig.messages.filter(message =>
+        typeof message === 'string' && message.trim().length > 0)
     : [];
 
   if (!chatConfig.enabled || messages.length === 0) return;
@@ -322,48 +309,44 @@ function startChatMessages(activeBot) {
 
   const sendRandomMessage = () => {
     if (!isActiveBot(activeBot)) return;
-
     const message = messages[Math.floor(Math.random() * messages.length)]
       .trim()
       .slice(0, 240);
-
     activeBot.chat(message);
     console.log(`[CHAT SENT] ${message}`);
   };
 
   scheduleBotTimer(sendRandomMessage, 15000);
 
-  const scheduleNextMessage = () => {
-    scheduleBotTimer(() => {
-      if (!isActiveBot(activeBot)) return;
-      sendRandomMessage();
-      scheduleNextMessage();
-    }, repeatDelayMs);
-  };
-
-  if (chatConfig.repeat !== false) scheduleNextMessage();
+  if (chatConfig.repeat !== false) {
+    const scheduleNextMessage = () => {
+      scheduleBotTimer(() => {
+        if (!isActiveBot(activeBot)) return;
+        sendRandomMessage();
+        scheduleNextMessage();
+      }, repeatDelayMs);
+    };
+    scheduleNextMessage();
+  }
 }
 
 function createBot(config = configuredServer()) {
   if (isConnecting || bot?.player) return;
 
-  if (!hasValidServerConfig(config)) {
-    console.error('[CONFIG] Invalid server IP or port in settings.json');
+  if (!validServerConfig(config)) {
+    console.error('[CONFIG] Invalid server address or fallback port in settings.json');
     return;
   }
 
   if (reconnectTimer) clearTimeout(reconnectTimer);
   reconnectTimer = undefined;
-
   clearBotTimers();
   clearConnectWatchdog();
   isConnecting = true;
 
   const options = {
     host: config.host,
-    port: config.port,
     username: config.username,
-    version: config.version,
     auth: String(account.type || 'offline').toLowerCase() === 'microsoft'
       ? 'microsoft'
       : 'offline',
@@ -373,9 +356,19 @@ function createBot(config = configuredServer()) {
     hideErrors: true
   };
 
+  if (config.version) options.version = config.version;
+
+  // Aternos changes the real backend host/port between server starts.
+  // Omitting port makes node-minecraft-protocol resolve the domain's SRV record.
+  if (!config.useSrv) options.port = config.configuredPort;
+
+  const target = config.useSrv
+    ? `${config.host} (SRV auto-resolve; configured port ${config.configuredPort} ignored)`
+    : `${config.host}:${config.configuredPort}`;
+
   console.log(
-    `[BOT] Connecting normally to ${config.host}:${config.port} as ` +
-    `${config.username} using Java ${config.version}`
+    `[BOT] Connecting to ${target} as ${config.username}` +
+    `${config.version ? ` using Java ${config.version}` : ' with version auto-detection'}`
   );
 
   let activeBot;
@@ -393,15 +386,19 @@ function createBot(config = configuredServer()) {
   }
 
   activeBot._client?.once('connect', () => {
-    console.log('[NETWORK] TCP connection established. Starting Minecraft handshake...');
+    const socket = activeBot._client?.socket;
+    const remote = socket?.remoteAddress && socket?.remotePort
+      ? `${socket.remoteAddress}:${socket.remotePort}`
+      : 'resolved Minecraft endpoint';
+    console.log(`[NETWORK] TCP connection established to ${remote}.`);
   });
 
   connectWatchdog = setTimeout(() => {
     if (bot !== activeBot || spawned) return;
 
     console.log(
-      `[CONNECT TIMEOUT] No spawn after ` +
-      `${Math.round(connectTimeoutMs / 1000)}s. Resetting connection...`
+      `[CONNECT TIMEOUT] No spawn after ${Math.round(connectTimeoutMs / 1000)}s. ` +
+      'Closing this attempt and retrying...'
     );
 
     clearConnectWatchdog();
@@ -427,14 +424,12 @@ function createBot(config = configuredServer()) {
     console.log('[BOT] Server accepted the offline-mode login handshake.');
   });
 
-  activeBot.on('spawn', () => {
+  activeBot.once('spawn', () => {
     spawned = true;
     isConnecting = false;
     clearConnectWatchdog();
     clearBotTimers(activeBot);
-
     console.log(`[BOT] Joined successfully as ${config.username}`);
-
     startRandomActions(activeBot);
     startChatMessages(activeBot);
   });
@@ -455,13 +450,10 @@ function createBot(config = configuredServer()) {
 
   activeBot.once('end', reason => {
     console.log(`[BOT] Disconnected: ${reason || 'unknown reason'}`);
-
     clearConnectWatchdog();
     clearBotTimers(activeBot);
-
     if (bot === activeBot) bot = undefined;
     isConnecting = false;
-
     scheduleReconnect();
   });
 }
