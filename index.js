@@ -11,7 +11,7 @@ app.get('/', (_req, res) => {
   res.send('Minecraft AFK bot service is running.');
 });
 
-const webServer = app.listen(webPort, '0.0.0.0', () => {
+app.listen(webPort, () => {
   console.log(`[WEB] Listening on port ${webPort}`);
 });
 
@@ -27,19 +27,12 @@ const reconnectDelayMs = Math.max(
   Number(utils['auto-reconnect-delay'] || 60000)
 );
 
-const initialConnectDelayMs = Math.max(
-  0,
-  Number(process.env.INITIAL_CONNECT_DELAY_MS || 75000)
-);
-
 let bot;
 let reconnectTimer;
-let initialConnectTimer;
 let antiAfkTimer;
 let chatTimer;
 let sneakState = false;
 let reconnectAttempt = 0;
-let shuttingDown = false;
 
 function clearBotTimers() {
   if (antiAfkTimer) clearInterval(antiAfkTimer);
@@ -58,8 +51,6 @@ function formatReason(reason) {
 }
 
 function scheduleReconnect() {
-  if (shuttingDown) return;
-
   if (!reconnectEnabled) {
     console.log('[BOT] Auto-reconnect is disabled.');
     return;
@@ -89,17 +80,13 @@ function startAntiAfk(activeBot) {
   antiAfkTimer = setInterval(() => {
     if (!activeBot.entity) return;
 
-    try {
-      const nextYaw = activeBot.entity.yaw + 0.35;
-      activeBot.look(nextYaw, activeBot.entity.pitch, true).catch(() => {});
-      activeBot.swingArm('right');
+    const nextYaw = activeBot.entity.yaw + 0.35;
+    activeBot.look(nextYaw, activeBot.entity.pitch, true).catch(() => {});
+    activeBot.swingArm('right');
 
-      if (antiAfk.sneak) {
-        sneakState = !sneakState;
-        activeBot.setControlState('sneak', sneakState);
-      }
-    } catch (error) {
-      console.log(`[ANTI-AFK ERROR] ${error?.message || error}`);
+    if (antiAfk.sneak) {
+      sneakState = !sneakState;
+      activeBot.setControlState('sneak', sneakState);
     }
   }, 10000);
 }
@@ -120,16 +107,11 @@ function startChatMessages(activeBot) {
 
   const sendRandomMessage = () => {
     if (!activeBot.player) return;
-
-    try {
-      const message = messages[Math.floor(Math.random() * messages.length)]
-        .trim()
-        .slice(0, 240);
-      activeBot.chat(message);
-      console.log(`[CHAT SENT] ${message}`);
-    } catch (error) {
-      console.log(`[CHAT ERROR] ${error?.message || error}`);
-    }
+    const message = messages[Math.floor(Math.random() * messages.length)]
+      .trim()
+      .slice(0, 240);
+    activeBot.chat(message);
+    console.log(`[CHAT SENT] ${message}`);
   };
 
   setTimeout(sendRandomMessage, 15000);
@@ -140,8 +122,6 @@ function startChatMessages(activeBot) {
 }
 
 function createBot() {
-  if (shuttingDown) return;
-
   clearBotTimers();
   sneakState = false;
 
@@ -199,50 +179,11 @@ function createBot() {
   bot.once('end', reason => {
     console.log(`[BOT] Disconnected: ${reason || 'unknown reason'}`);
     clearBotTimers();
-    bot = undefined;
-
-    if (!shuttingDown) {
-      scheduleReconnect();
-    }
+    scheduleReconnect();
   });
 }
 
-function gracefulShutdown(signal) {
-  if (shuttingDown) return;
-  shuttingDown = true;
-
-  console.log(`[SYSTEM] ${signal} received. Disconnecting the bot cleanly...`);
-
-  if (initialConnectTimer) clearTimeout(initialConnectTimer);
-  if (reconnectTimer) clearTimeout(reconnectTimer);
-  initialConnectTimer = undefined;
-  reconnectTimer = undefined;
-  clearBotTimers();
-
-  try {
-    if (bot) {
-      bot.quit('Render deployment shutdown');
-    }
-  } catch (error) {
-    console.log(`[SHUTDOWN ERROR] ${error?.message || error}`);
-  }
-
-  webServer.close(() => process.exit(0));
-  setTimeout(() => process.exit(0), 5000).unref();
-}
-
-process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
-process.once('SIGINT', () => gracefulShutdown('SIGINT'));
-
-console.log(
-  `[BOT] Initial connection scheduled in ${initialConnectDelayMs / 1000}s ` +
-  'to avoid duplicate bot sessions during Render deploys...'
-);
-
-initialConnectTimer = setTimeout(() => {
-  initialConnectTimer = undefined;
-  createBot();
-}, initialConnectDelayMs);
+createBot();
 
 const selfPingUrl =
   process.env.SELF_PING_URL ||
