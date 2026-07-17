@@ -1,13 +1,17 @@
 {
-  "name": "BotMadeByAkshit",
-  "version": "1.0.0",
-  "description": "Minecraft AFK bot hosted on Render",
+  "name": "bot-made-by-akshit",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Minecraft Java AFK bot hosted on Render",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
-    "express": "^4.18.2",
-    "mineflayer": "^4.17.0"
+    "express": "^4.21.2",
+    "mineflayer": "^4.36.0"
   }
 }
