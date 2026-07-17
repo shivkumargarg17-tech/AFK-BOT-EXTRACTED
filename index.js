@@ -1,7 +1,6 @@
 'use strict';
 
 const express = require('express');
-const net = require('net');
 const mineflayer = require('mineflayer');
 const settings = require('./settings.json');
 
@@ -26,11 +25,11 @@ const chatConfig = utils['chat-messages'] || {};
 const reconnectEnabled = utils['auto-reconnect'] !== false;
 const reconnectDelayMs = Math.max(
   5000,
-  Number(utils['auto-reconnect-delay'] || 5000)
+  Number(utils['auto-reconnect-delay'] || 10000)
 );
 const connectTimeoutMs = Math.max(
-  15000,
-  Number(utils['connect-timeout'] || 25) * 1000
+  20000,
+  Number(utils['connect-timeout'] || 35) * 1000
 );
 const keepAliveTimeoutMs = Math.max(
   60000,
@@ -42,6 +41,7 @@ let reconnectTimer;
 let connectWatchdog;
 let isConnecting = false;
 const botTimers = new Set();
+
 const actionCounts = {
   move: 0,
   jump: 0,
@@ -70,6 +70,7 @@ function scheduleBotTimer(callback, delayMs) {
     botTimers.delete(timer);
     callback();
   }, delayMs);
+
   botTimers.add(timer);
   return timer;
 }
@@ -90,10 +91,6 @@ function clearBotTimers(activeBot = bot) {
 function clearConnectWatchdog() {
   if (connectWatchdog) clearTimeout(connectWatchdog);
   connectWatchdog = undefined;
-}
-
-function resetActionCounts() {
-  for (const action of Object.keys(actionCounts)) actionCounts[action] = 0;
 }
 
 function formatReason(reason) {
@@ -144,6 +141,7 @@ function scheduleReconnect(delayMs = reconnectDelayMs) {
 
 function actionConfig(name, defaults) {
   const config = randomActions[name] || {};
+
   return {
     chance: clampChance(config.chance, defaults.chance),
     minDelay: Number(config['min-delay'] ?? defaults.minDelay),
@@ -187,6 +185,7 @@ function scheduleMovement(activeBot) {
       randomNumber(-0.18, 0.18),
       true
     ).catch(() => {});
+
     activeBot.setControlState(direction, true);
     activeBot.setControlState('sprint', direction === 'forward');
     logAction('move', `${direction}, ${(durationMs / 1000).toFixed(1)}s`);
@@ -216,6 +215,7 @@ function scheduleJump(activeBot) {
       const durationMs = randomDelayMs(config.minDuration, config.maxDuration);
       activeBot.setControlState('jump', true);
       logAction('jump');
+
       scheduleBotTimer(() => {
         if (isActiveBot(activeBot)) activeBot.setControlState('jump', false);
       }, durationMs);
@@ -241,6 +241,7 @@ function scheduleCrouch(activeBot) {
       const durationMs = randomDelayMs(config.minDuration, config.maxDuration);
       activeBot.setControlState('sneak', true);
       logAction('crouch', `${(durationMs / 1000).toFixed(1)}s`);
+
       scheduleBotTimer(() => {
         if (isActiveBot(activeBot)) activeBot.setControlState('sneak', false);
       }, durationMs);
@@ -270,12 +271,17 @@ function schedulePunch(activeBot) {
 }
 
 function scheduleActionSummary(activeBot) {
-  const summarySeconds = Math.max(15, Number(antiAfk['summary-interval'] || 60));
+  const summarySeconds = Math.max(
+    15,
+    Number(antiAfk['summary-interval'] || 60)
+  );
 
   scheduleBotTimer(() => {
     if (!isActiveBot(activeBot)) return;
 
-    const total = Object.values(actionCounts).reduce((sum, count) => sum + count, 0);
+    const total = Object.values(actionCounts)
+      .reduce((sum, count) => sum + count, 0);
+
     const ratio = Object.entries(actionCounts)
       .map(([action, count]) => {
         const percentage = total === 0 ? 0 : (count / total) * 100;
@@ -291,7 +297,8 @@ function scheduleActionSummary(activeBot) {
 function startRandomActions(activeBot) {
   if (!antiAfk.enabled || randomActions.enabled === false) return;
 
-  resetActionCounts();
+  for (const action of Object.keys(actionCounts)) actionCounts[action] = 0;
+
   scheduleMovement(activeBot);
   scheduleJump(activeBot);
   scheduleCrouch(activeBot);
@@ -315,9 +322,11 @@ function startChatMessages(activeBot) {
 
   const sendRandomMessage = () => {
     if (!isActiveBot(activeBot)) return;
+
     const message = messages[Math.floor(Math.random() * messages.length)]
       .trim()
       .slice(0, 240);
+
     activeBot.chat(message);
     console.log(`[CHAT SENT] ${message}`);
   };
@@ -335,34 +344,6 @@ function startChatMessages(activeBot) {
   if (chatConfig.repeat !== false) scheduleNextMessage();
 }
 
-function createIPv4Connector(config) {
-  return client => {
-    console.log(`[NETWORK] Opening IPv4 socket to ${config.host}:${config.port}...`);
-
-    const socket = net.connect({
-      host: config.host,
-      port: config.port,
-      family: 4
-    });
-
-    const socketTimeout = setTimeout(() => {
-      socket.destroy(new Error(`TCP connection timed out after ${connectTimeoutMs}ms`));
-    }, connectTimeoutMs);
-
-    socket.once('connect', () => {
-      clearTimeout(socketTimeout);
-      console.log('[NETWORK] TCP connection established. Starting Minecraft handshake...');
-      client.setSocket(socket);
-      client.emit('connect');
-    });
-
-    socket.once('error', error => {
-      clearTimeout(socketTimeout);
-      client.emit('error', error);
-    });
-  };
-}
-
 function createBot(config = configuredServer()) {
   if (isConnecting || bot?.player) return;
 
@@ -373,26 +354,28 @@ function createBot(config = configuredServer()) {
 
   if (reconnectTimer) clearTimeout(reconnectTimer);
   reconnectTimer = undefined;
+
   clearBotTimers();
   clearConnectWatchdog();
   isConnecting = true;
 
   const options = {
+    host: config.host,
+    port: config.port,
     username: config.username,
     version: config.version,
     auth: String(account.type || 'offline').toLowerCase() === 'microsoft'
       ? 'microsoft'
       : 'offline',
-    fakeHost: config.host,
     keepAlive: true,
     checkTimeoutInterval: keepAliveTimeoutMs,
-    connect: createIPv4Connector(config),
     logErrors: false,
     hideErrors: true
   };
 
   console.log(
-    `[BOT] Connecting to ${config.host}:${config.port} as ${config.username} using Java ${config.version}`
+    `[BOT] Connecting normally to ${config.host}:${config.port} as ` +
+    `${config.username} using Java ${config.version}`
   );
 
   let activeBot;
@@ -409,20 +392,29 @@ function createBot(config = configuredServer()) {
     return;
   }
 
+  activeBot._client?.once('connect', () => {
+    console.log('[NETWORK] TCP connection established. Starting Minecraft handshake...');
+  });
+
   connectWatchdog = setTimeout(() => {
     if (bot !== activeBot || spawned) return;
 
     console.log(
-      `[CONNECT TIMEOUT] No spawn after ${Math.round(connectTimeoutMs / 1000)}s. Resetting connection...`
+      `[CONNECT TIMEOUT] No spawn after ` +
+      `${Math.round(connectTimeoutMs / 1000)}s. Resetting connection...`
     );
+
+    clearConnectWatchdog();
     isConnecting = false;
     if (bot === activeBot) bot = undefined;
 
     try {
-      activeBot.end('connectionTimeout');
+      activeBot._client?.socket?.destroy(
+        new Error('Minecraft connection attempt timed out')
+      );
     } catch {
       try {
-        activeBot._client?.socket?.destroy();
+        activeBot.end('connectionTimeout');
       } catch {
         // Ignore cleanup errors.
       }
@@ -440,7 +432,9 @@ function createBot(config = configuredServer()) {
     isConnecting = false;
     clearConnectWatchdog();
     clearBotTimers(activeBot);
+
     console.log(`[BOT] Joined successfully as ${config.username}`);
+
     startRandomActions(activeBot);
     startChatMessages(activeBot);
   });
@@ -461,10 +455,13 @@ function createBot(config = configuredServer()) {
 
   activeBot.once('end', reason => {
     console.log(`[BOT] Disconnected: ${reason || 'unknown reason'}`);
+
     clearConnectWatchdog();
     clearBotTimers(activeBot);
+
     if (bot === activeBot) bot = undefined;
     isConnecting = false;
+
     scheduleReconnect();
   });
 }
