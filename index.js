@@ -22,30 +22,24 @@ const utils = settings.utils || {};
 const antiAfk = utils['anti-afk'] || {};
 const randomActions = antiAfk['random-actions'] || {};
 const chatConfig = utils['chat-messages'] || {};
-const onlineCheck = utils['server-online-check'] || {};
 
 const reconnectEnabled = utils['auto-reconnect'] !== false;
-const legacyReconnectDelayMs = Math.max(
-  10000,
-  Number(utils['auto-reconnect-delay'] || 60000)
+const reconnectDelayMs = Math.max(
+  5000,
+  Number(utils['auto-reconnect-delay'] || 5000)
 );
-const onlineCheckEnabled = onlineCheck.enabled !== false;
-const onlineCheckMinMs = Math.max(
-  30000,
-  Number(onlineCheck['min-delay'] || 30) * 1000
+const connectTimeoutMs = Math.max(
+  15000,
+  Number(utils['connect-timeout'] || 25) * 1000
 );
-const onlineCheckMaxMs = Math.max(
-  onlineCheckMinMs,
-  Number(onlineCheck['max-delay'] || 60) * 1000
-);
-const onlineCheckTimeoutMs = Math.max(
-  3000,
-  Number(onlineCheck.timeout || 8) * 1000
+const keepAliveTimeoutMs = Math.max(
+  60000,
+  Number(utils['keepalive-timeout'] || 300) * 1000
 );
 
 let bot;
 let reconnectTimer;
-let isCheckingServer = false;
+let connectWatchdog;
 let isConnecting = false;
 const botTimers = new Set();
 const actionCounts = {
@@ -88,9 +82,14 @@ function clearBotTimers(activeBot = bot) {
     try {
       activeBot.clearControlStates();
     } catch {
-      // The connection may already be fully closed.
+      // The connection may already be closed.
     }
   }
+}
+
+function clearConnectWatchdog() {
+  if (connectWatchdog) clearTimeout(connectWatchdog);
+  connectWatchdog = undefined;
 }
 
 function resetActionCounts() {
@@ -110,7 +109,7 @@ function configuredServer() {
   return {
     host: String(server.ip || '').trim(),
     port: Number(server.port),
-    username: String(account.username || 'BotMadeByAkshit').trim(),
+    username: String(account.username || 'AfkBotByAkshit').trim(),
     version: String(server.version || '1.21.11').trim()
   };
 }
@@ -128,79 +127,19 @@ function isActiveBot(activeBot) {
   return bot === activeBot && Boolean(activeBot?.entity && activeBot?.player);
 }
 
-function serverIsReachable(host, port) {
-  return new Promise(resolve => {
-    let settled = false;
-    const socket = net.createConnection({ host, port });
-
-    const finish = online => {
-      if (settled) return;
-      settled = true;
-      socket.destroy();
-      resolve(online);
-    };
-
-    socket.setTimeout(onlineCheckTimeoutMs);
-    socket.once('connect', () => finish(true));
-    socket.once('timeout', () => finish(false));
-    socket.once('error', () => finish(false));
-  });
-}
-
-function nextReconnectDelayMs() {
-  if (!onlineCheckEnabled) return legacyReconnectDelayMs;
-  return Math.round(randomNumber(onlineCheckMinMs, onlineCheckMaxMs));
-}
-
-function scheduleReconnect(delayMs = nextReconnectDelayMs()) {
+function scheduleReconnect(delayMs = reconnectDelayMs) {
   if (!reconnectEnabled) {
     console.log('[BOT] Auto-reconnect is disabled.');
     return;
   }
 
-  if (reconnectTimer || isCheckingServer || isConnecting) return;
+  if (reconnectTimer || isConnecting || bot?.player) return;
 
-  console.log(
-    `[BOT] Next server check/reconnect attempt in ${Math.round(delayMs / 1000)}s...`
-  );
-
+  console.log(`[BOT] Reconnecting in ${Math.round(delayMs / 1000)}s...`);
   reconnectTimer = setTimeout(() => {
     reconnectTimer = undefined;
-    connectWhenAvailable().catch(error => {
-      console.log(`[CHECK ERROR] ${error?.message || error}`);
-      scheduleReconnect();
-    });
+    createBot();
   }, delayMs);
-}
-
-async function connectWhenAvailable() {
-  if (isCheckingServer || isConnecting || bot?.player) return;
-
-  const config = configuredServer();
-  if (!hasValidServerConfig(config)) {
-    console.error('[CONFIG] Invalid server IP or port in settings.json');
-    return;
-  }
-
-  if (!onlineCheckEnabled) {
-    createBot(config);
-    return;
-  }
-
-  isCheckingServer = true;
-  console.log(`[CHECK] Checking ${config.host}:${config.port}...`);
-
-  const online = await serverIsReachable(config.host, config.port);
-  isCheckingServer = false;
-
-  if (!online) {
-    console.log('[CHECK] Server appears offline or is still starting.');
-    scheduleReconnect();
-    return;
-  }
-
-  console.log('[CHECK] Server is online. Joining now...');
-  createBot(config);
 }
 
 function actionConfig(name, defaults) {
@@ -242,10 +181,12 @@ function scheduleMovement(activeBot) {
     const directions = ['forward', 'back', 'left', 'right'];
     const direction = directions[Math.floor(Math.random() * directions.length)];
     const durationMs = randomDelayMs(config.minDuration, config.maxDuration);
-    const yaw = randomNumber(-Math.PI, Math.PI);
-    const pitch = randomNumber(-0.18, 0.18);
 
-    activeBot.look(yaw, pitch, true).catch(() => {});
+    activeBot.look(
+      randomNumber(-Math.PI, Math.PI),
+      randomNumber(-0.18, 0.18),
+      true
+    ).catch(() => {});
     activeBot.setControlState(direction, true);
     activeBot.setControlState('sprint', direction === 'forward');
     logAction('move', `${direction}, ${(durationMs / 1000).toFixed(1)}s`);
@@ -394,6 +335,34 @@ function startChatMessages(activeBot) {
   if (chatConfig.repeat !== false) scheduleNextMessage();
 }
 
+function createIPv4Connector(config) {
+  return client => {
+    console.log(`[NETWORK] Opening IPv4 socket to ${config.host}:${config.port}...`);
+
+    const socket = net.connect({
+      host: config.host,
+      port: config.port,
+      family: 4
+    });
+
+    const socketTimeout = setTimeout(() => {
+      socket.destroy(new Error(`TCP connection timed out after ${connectTimeoutMs}ms`));
+    }, connectTimeoutMs);
+
+    socket.once('connect', () => {
+      clearTimeout(socketTimeout);
+      console.log('[NETWORK] TCP connection established. Starting Minecraft handshake...');
+      client.setSocket(socket);
+      client.emit('connect');
+    });
+
+    socket.once('error', error => {
+      clearTimeout(socketTimeout);
+      client.emit('error', error);
+    });
+  };
+}
+
 function createBot(config = configuredServer()) {
   if (isConnecting || bot?.player) return;
 
@@ -402,17 +371,24 @@ function createBot(config = configuredServer()) {
     return;
   }
 
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = undefined;
   clearBotTimers();
+  clearConnectWatchdog();
   isConnecting = true;
 
   const options = {
-    host: config.host,
-    port: config.port,
     username: config.username,
     version: config.version,
     auth: String(account.type || 'offline').toLowerCase() === 'microsoft'
       ? 'microsoft'
-      : 'offline'
+      : 'offline',
+    fakeHost: config.host,
+    keepAlive: true,
+    checkTimeoutInterval: keepAliveTimeoutMs,
+    connect: createIPv4Connector(config),
+    logErrors: false,
+    hideErrors: true
   };
 
   console.log(
@@ -420,22 +396,49 @@ function createBot(config = configuredServer()) {
   );
 
   let activeBot;
+  let spawned = false;
+
   try {
     activeBot = mineflayer.createBot(options);
     bot = activeBot;
   } catch (error) {
     isConnecting = false;
+    bot = undefined;
     console.log(`[BOT CREATE ERROR] ${error?.message || error}`);
     scheduleReconnect();
     return;
   }
 
+  connectWatchdog = setTimeout(() => {
+    if (bot !== activeBot || spawned) return;
+
+    console.log(
+      `[CONNECT TIMEOUT] No spawn after ${Math.round(connectTimeoutMs / 1000)}s. Resetting connection...`
+    );
+    isConnecting = false;
+    if (bot === activeBot) bot = undefined;
+
+    try {
+      activeBot.end('connectionTimeout');
+    } catch {
+      try {
+        activeBot._client?.socket?.destroy();
+      } catch {
+        // Ignore cleanup errors.
+      }
+    }
+
+    scheduleReconnect(5000);
+  }, connectTimeoutMs);
+
   activeBot.once('login', () => {
-    console.log('[BOT] Login accepted by the server.');
+    console.log('[BOT] Server accepted the offline-mode login handshake.');
   });
 
   activeBot.on('spawn', () => {
+    spawned = true;
     isConnecting = false;
+    clearConnectWatchdog();
     clearBotTimers(activeBot);
     console.log(`[BOT] Joined successfully as ${config.username}`);
     startRandomActions(activeBot);
@@ -458,6 +461,7 @@ function createBot(config = configuredServer()) {
 
   activeBot.once('end', reason => {
     console.log(`[BOT] Disconnected: ${reason || 'unknown reason'}`);
+    clearConnectWatchdog();
     clearBotTimers(activeBot);
     if (bot === activeBot) bot = undefined;
     isConnecting = false;
@@ -465,10 +469,7 @@ function createBot(config = configuredServer()) {
   });
 }
 
-connectWhenAvailable().catch(error => {
-  console.log(`[STARTUP ERROR] ${error?.message || error}`);
-  scheduleReconnect();
-});
+createBot();
 
 const selfPingUrl =
   process.env.SELF_PING_URL ||
