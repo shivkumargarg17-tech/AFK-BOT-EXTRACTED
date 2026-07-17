@@ -23,8 +23,8 @@ const chatConfig = utils['chat-messages'] || {};
 
 const reconnectEnabled = utils['auto-reconnect'] !== false;
 const reconnectDelayMs = Math.max(
-  5000,
-  Number(utils['auto-reconnect-delay'] || 30000)
+  10000,
+  Number(utils['auto-reconnect-delay'] || 60000)
 );
 
 let bot;
@@ -32,6 +32,7 @@ let reconnectTimer;
 let antiAfkTimer;
 let chatTimer;
 let sneakState = false;
+let reconnectAttempt = 0;
 
 function clearBotTimers() {
   if (antiAfkTimer) clearInterval(antiAfkTimer);
@@ -50,11 +51,25 @@ function formatReason(reason) {
 }
 
 function scheduleReconnect() {
-  if (!reconnectEnabled || reconnectTimer) return;
+  if (!reconnectEnabled) {
+    console.log('[BOT] Auto-reconnect is disabled.');
+    return;
+  }
 
-  console.log(`[BOT] Reconnecting in ${reconnectDelayMs / 1000}s...`);
+  if (reconnectTimer) {
+    console.log('[BOT] A reconnect is already scheduled.');
+    return;
+  }
+
+  const nextAttempt = reconnectAttempt + 1;
+  console.log(
+    `[BOT] Reconnect attempt #${nextAttempt} scheduled in ${reconnectDelayMs / 1000}s...`
+  );
+
   reconnectTimer = setTimeout(() => {
     reconnectTimer = undefined;
+    reconnectAttempt = nextAttempt;
+    console.log(`[BOT] Reconnect attempt #${reconnectAttempt} starting now...`);
     createBot();
   }, reconnectDelayMs);
 }
@@ -141,6 +156,7 @@ function createBot() {
   });
 
   bot.once('spawn', () => {
+    reconnectAttempt = 0;
     console.log(`[BOT] Joined successfully as ${username}`);
     startAntiAfk(bot);
     startChatMessages(bot);
