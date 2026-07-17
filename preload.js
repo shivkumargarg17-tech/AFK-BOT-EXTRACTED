@@ -4,11 +4,45 @@ const dns = require('dns');
 
 try {
   dns.setDefaultResultOrder('ipv4first');
-  dns.setServers(['1.1.1.1', '8.8.8.8']);
-  console.log('[DNS] Using Cloudflare/Google DNS with IPv4-first resolution.');
 } catch (error) {
-  console.log(`[DNS] Could not apply custom DNS settings: ${error.message}`);
+  console.log(`[DNS] Could not enable IPv4-first resolution: ${error.message}`);
 }
+
+// node-minecraft-protocol uses dns.resolveSrv() for Minecraft domains. Try
+// fresh public resolvers first to avoid stale Aternos records, but always fall
+// back to Render's system DNS if direct public-DNS traffic is unavailable.
+const originalResolveSrv = dns.resolveSrv.bind(dns);
+const publicResolver = new dns.Resolver();
+publicResolver.setServers(['1.1.1.1', '8.8.8.8']);
+
+dns.resolveSrv = function resolveSrvWithFallback(hostname, callback) {
+  let finished = false;
+
+  const finishWithSystemDns = () => {
+    if (finished) return;
+    finished = true;
+    originalResolveSrv(hostname, callback);
+  };
+
+  const timeout = setTimeout(finishWithSystemDns, 5000);
+
+  publicResolver.resolveSrv(hostname, (error, records) => {
+    if (finished) return;
+    clearTimeout(timeout);
+
+    if (!error && Array.isArray(records) && records.length > 0) {
+      finished = true;
+      console.log(`[DNS] Public DNS resolved ${hostname}.`);
+      callback(null, records);
+      return;
+    }
+
+    console.log(
+      `[DNS] Public DNS could not resolve ${hostname}; using system DNS.`
+    );
+    finishWithSystemDns();
+  });
+};
 
 const mineflayer = require('mineflayer');
 const originalCreateBot = mineflayer.createBot;
