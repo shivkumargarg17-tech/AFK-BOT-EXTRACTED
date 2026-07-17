@@ -1,6 +1,7 @@
 'use strict';
 
 const express = require('express');
+const net = require('net');
 const mineflayer = require('mineflayer');
 const settings = require('./settings.json');
 
@@ -19,26 +20,81 @@ const account = settings['bot-account'] || {};
 const server = settings.server || {};
 const utils = settings.utils || {};
 const antiAfk = utils['anti-afk'] || {};
+const randomActions = antiAfk['random-actions'] || {};
 const chatConfig = utils['chat-messages'] || {};
+const onlineCheck = utils['server-online-check'] || {};
 
 const reconnectEnabled = utils['auto-reconnect'] !== false;
-const reconnectDelayMs = Math.max(
+const legacyReconnectDelayMs = Math.max(
   10000,
   Number(utils['auto-reconnect-delay'] || 60000)
+);
+const onlineCheckEnabled = onlineCheck.enabled !== false;
+const onlineCheckMinMs = Math.max(
+  30000,
+  Number(onlineCheck['min-delay'] || 30) * 1000
+);
+const onlineCheckMaxMs = Math.max(
+  onlineCheckMinMs,
+  Number(onlineCheck['max-delay'] || 60) * 1000
+);
+const onlineCheckTimeoutMs = Math.max(
+  3000,
+  Number(onlineCheck.timeout || 8) * 1000
 );
 
 let bot;
 let reconnectTimer;
-let antiAfkTimer;
-let chatTimer;
-let sneakState = false;
-let reconnectAttempt = 0;
+let isCheckingServer = false;
+let isConnecting = false;
+const botTimers = new Set();
+const actionCounts = {
+  move: 0,
+  jump: 0,
+  crouch: 0,
+  punch: 0
+};
 
-function clearBotTimers() {
-  if (antiAfkTimer) clearInterval(antiAfkTimer);
-  if (chatTimer) clearInterval(chatTimer);
-  antiAfkTimer = undefined;
-  chatTimer = undefined;
+function randomNumber(min, max) {
+  return Math.random() * (max - min) + min;
+}
+
+function randomDelayMs(minSeconds, maxSeconds) {
+  const min = Math.max(0.1, Number(minSeconds));
+  const max = Math.max(min, Number(maxSeconds));
+  return Math.round(randomNumber(min, max) * 1000);
+}
+
+function clampChance(value, fallback) {
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) return fallback;
+  return Math.min(1, Math.max(0, parsed));
+}
+
+function scheduleBotTimer(callback, delayMs) {
+  const timer = setTimeout(() => {
+    botTimers.delete(timer);
+    callback();
+  }, delayMs);
+  botTimers.add(timer);
+  return timer;
+}
+
+function clearBotTimers(activeBot = bot) {
+  for (const timer of botTimers) clearTimeout(timer);
+  botTimers.clear();
+
+  if (activeBot) {
+    try {
+      activeBot.clearControlStates();
+    } catch {
+      // The connection may already be fully closed.
+    }
+  }
+}
+
+function resetActionCounts() {
+  for (const action of Object.keys(actionCounts)) actionCounts[action] = 0;
 }
 
 function formatReason(reason) {
@@ -50,45 +106,256 @@ function formatReason(reason) {
   }
 }
 
-function scheduleReconnect() {
+function configuredServer() {
+  return {
+    host: String(server.ip || '').trim(),
+    port: Number(server.port),
+    username: String(account.username || 'BotMadeByAkshit').trim(),
+    version: String(server.version || '1.21.11').trim()
+  };
+}
+
+function hasValidServerConfig(config) {
+  return Boolean(
+    config.host &&
+    Number.isInteger(config.port) &&
+    config.port >= 1 &&
+    config.port <= 65535
+  );
+}
+
+function isActiveBot(activeBot) {
+  return bot === activeBot && Boolean(activeBot?.entity && activeBot?.player);
+}
+
+function serverIsReachable(host, port) {
+  return new Promise(resolve => {
+    let settled = false;
+    const socket = net.createConnection({ host, port });
+
+    const finish = online => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(online);
+    };
+
+    socket.setTimeout(onlineCheckTimeoutMs);
+    socket.once('connect', () => finish(true));
+    socket.once('timeout', () => finish(false));
+    socket.once('error', () => finish(false));
+  });
+}
+
+function nextReconnectDelayMs() {
+  if (!onlineCheckEnabled) return legacyReconnectDelayMs;
+  return Math.round(randomNumber(onlineCheckMinMs, onlineCheckMaxMs));
+}
+
+function scheduleReconnect(delayMs = nextReconnectDelayMs()) {
   if (!reconnectEnabled) {
     console.log('[BOT] Auto-reconnect is disabled.');
     return;
   }
 
-  if (reconnectTimer) {
-    console.log('[BOT] A reconnect is already scheduled.');
-    return;
-  }
+  if (reconnectTimer || isCheckingServer || isConnecting) return;
 
-  const nextAttempt = reconnectAttempt + 1;
   console.log(
-    `[BOT] Reconnect attempt #${nextAttempt} scheduled in ${reconnectDelayMs / 1000}s...`
+    `[BOT] Next server check/reconnect attempt in ${Math.round(delayMs / 1000)}s...`
   );
 
   reconnectTimer = setTimeout(() => {
     reconnectTimer = undefined;
-    reconnectAttempt = nextAttempt;
-    console.log(`[BOT] Reconnect attempt #${reconnectAttempt} starting now...`);
-    createBot();
-  }, reconnectDelayMs);
+    connectWhenAvailable().catch(error => {
+      console.log(`[CHECK ERROR] ${error?.message || error}`);
+      scheduleReconnect();
+    });
+  }, delayMs);
 }
 
-function startAntiAfk(activeBot) {
-  if (!antiAfk.enabled) return;
+async function connectWhenAvailable() {
+  if (isCheckingServer || isConnecting || bot?.player) return;
 
-  antiAfkTimer = setInterval(() => {
-    if (!activeBot.entity) return;
+  const config = configuredServer();
+  if (!hasValidServerConfig(config)) {
+    console.error('[CONFIG] Invalid server IP or port in settings.json');
+    return;
+  }
 
-    const nextYaw = activeBot.entity.yaw + 0.35;
-    activeBot.look(nextYaw, activeBot.entity.pitch, true).catch(() => {});
-    activeBot.swingArm('right');
+  if (!onlineCheckEnabled) {
+    createBot(config);
+    return;
+  }
 
-    if (antiAfk.sneak) {
-      sneakState = !sneakState;
-      activeBot.setControlState('sneak', sneakState);
+  isCheckingServer = true;
+  console.log(`[CHECK] Checking ${config.host}:${config.port}...`);
+
+  const online = await serverIsReachable(config.host, config.port);
+  isCheckingServer = false;
+
+  if (!online) {
+    console.log('[CHECK] Server appears offline or is still starting.');
+    scheduleReconnect();
+    return;
+  }
+
+  console.log('[CHECK] Server is online. Joining now...');
+  createBot(config);
+}
+
+function actionConfig(name, defaults) {
+  const config = randomActions[name] || {};
+  return {
+    chance: clampChance(config.chance, defaults.chance),
+    minDelay: Number(config['min-delay'] ?? defaults.minDelay),
+    maxDelay: Number(config['max-delay'] ?? defaults.maxDelay),
+    minDuration: Number(config['min-duration'] ?? defaults.minDuration ?? 0),
+    maxDuration: Number(config['max-duration'] ?? defaults.maxDuration ?? 0)
+  };
+}
+
+function logAction(action, detail = '') {
+  actionCounts[action] += 1;
+  if (antiAfk['log-actions'] === false) return;
+
+  const suffix = detail ? ` (${detail})` : '';
+  console.log(`[ACTION] ${action}${suffix} | total=${actionCounts[action]}`);
+}
+
+function scheduleMovement(activeBot) {
+  const config = actionConfig('move', {
+    chance: 1,
+    minDelay: 2,
+    maxDelay: 6,
+    minDuration: 0.8,
+    maxDuration: 2.5
+  });
+
+  scheduleBotTimer(() => {
+    if (!isActiveBot(activeBot)) return;
+
+    if (Math.random() > config.chance) {
+      scheduleMovement(activeBot);
+      return;
     }
-  }, 10000);
+
+    const directions = ['forward', 'back', 'left', 'right'];
+    const direction = directions[Math.floor(Math.random() * directions.length)];
+    const durationMs = randomDelayMs(config.minDuration, config.maxDuration);
+    const yaw = randomNumber(-Math.PI, Math.PI);
+    const pitch = randomNumber(-0.18, 0.18);
+
+    activeBot.look(yaw, pitch, true).catch(() => {});
+    activeBot.setControlState(direction, true);
+    activeBot.setControlState('sprint', direction === 'forward');
+    logAction('move', `${direction}, ${(durationMs / 1000).toFixed(1)}s`);
+
+    scheduleBotTimer(() => {
+      if (!isActiveBot(activeBot)) return;
+      activeBot.setControlState(direction, false);
+      activeBot.setControlState('sprint', false);
+      scheduleMovement(activeBot);
+    }, durationMs);
+  }, randomDelayMs(config.minDelay, config.maxDelay));
+}
+
+function scheduleJump(activeBot) {
+  const config = actionConfig('jump', {
+    chance: 0.7,
+    minDelay: 2,
+    maxDelay: 8,
+    minDuration: 0.15,
+    maxDuration: 0.45
+  });
+
+  scheduleBotTimer(() => {
+    if (!isActiveBot(activeBot)) return;
+
+    if (Math.random() <= config.chance) {
+      const durationMs = randomDelayMs(config.minDuration, config.maxDuration);
+      activeBot.setControlState('jump', true);
+      logAction('jump');
+      scheduleBotTimer(() => {
+        if (isActiveBot(activeBot)) activeBot.setControlState('jump', false);
+      }, durationMs);
+    }
+
+    scheduleJump(activeBot);
+  }, randomDelayMs(config.minDelay, config.maxDelay));
+}
+
+function scheduleCrouch(activeBot) {
+  const config = actionConfig('crouch', {
+    chance: 0.5,
+    minDelay: 4,
+    maxDelay: 12,
+    minDuration: 0.5,
+    maxDuration: 2.5
+  });
+
+  scheduleBotTimer(() => {
+    if (!isActiveBot(activeBot)) return;
+
+    if (Math.random() <= config.chance) {
+      const durationMs = randomDelayMs(config.minDuration, config.maxDuration);
+      activeBot.setControlState('sneak', true);
+      logAction('crouch', `${(durationMs / 1000).toFixed(1)}s`);
+      scheduleBotTimer(() => {
+        if (isActiveBot(activeBot)) activeBot.setControlState('sneak', false);
+      }, durationMs);
+    }
+
+    scheduleCrouch(activeBot);
+  }, randomDelayMs(config.minDelay, config.maxDelay));
+}
+
+function schedulePunch(activeBot) {
+  const config = actionConfig('punch', {
+    chance: 0.75,
+    minDelay: 2,
+    maxDelay: 10
+  });
+
+  scheduleBotTimer(() => {
+    if (!isActiveBot(activeBot)) return;
+
+    if (Math.random() <= config.chance) {
+      activeBot.swingArm('right');
+      logAction('punch');
+    }
+
+    schedulePunch(activeBot);
+  }, randomDelayMs(config.minDelay, config.maxDelay));
+}
+
+function scheduleActionSummary(activeBot) {
+  const summarySeconds = Math.max(15, Number(antiAfk['summary-interval'] || 60));
+
+  scheduleBotTimer(() => {
+    if (!isActiveBot(activeBot)) return;
+
+    const total = Object.values(actionCounts).reduce((sum, count) => sum + count, 0);
+    const ratio = Object.entries(actionCounts)
+      .map(([action, count]) => {
+        const percentage = total === 0 ? 0 : (count / total) * 100;
+        return `${action}=${count} (${percentage.toFixed(1)}%)`;
+      })
+      .join(', ');
+
+    console.log(`[ACTION SUMMARY] total=${total} | ${ratio}`);
+    scheduleActionSummary(activeBot);
+  }, summarySeconds * 1000);
+}
+
+function startRandomActions(activeBot) {
+  if (!antiAfk.enabled || randomActions.enabled === false) return;
+
+  resetActionCounts();
+  scheduleMovement(activeBot);
+  scheduleJump(activeBot);
+  scheduleCrouch(activeBot);
+  schedulePunch(activeBot);
+  scheduleActionSummary(activeBot);
 }
 
 function startChatMessages(activeBot) {
@@ -106,7 +373,7 @@ function startChatMessages(activeBot) {
   );
 
   const sendRandomMessage = () => {
-    if (!activeBot.player) return;
+    if (!isActiveBot(activeBot)) return;
     const message = messages[Math.floor(Math.random() * messages.length)]
       .trim()
       .slice(0, 240);
@@ -114,76 +381,94 @@ function startChatMessages(activeBot) {
     console.log(`[CHAT SENT] ${message}`);
   };
 
-  setTimeout(sendRandomMessage, 15000);
+  scheduleBotTimer(sendRandomMessage, 15000);
 
-  if (chatConfig.repeat !== false) {
-    chatTimer = setInterval(sendRandomMessage, repeatDelayMs);
-  }
+  const scheduleNextMessage = () => {
+    scheduleBotTimer(() => {
+      if (!isActiveBot(activeBot)) return;
+      sendRandomMessage();
+      scheduleNextMessage();
+    }, repeatDelayMs);
+  };
+
+  if (chatConfig.repeat !== false) scheduleNextMessage();
 }
 
-function createBot() {
-  clearBotTimers();
-  sneakState = false;
+function createBot(config = configuredServer()) {
+  if (isConnecting || bot?.player) return;
 
-  const host = String(server.ip || '').trim();
-  const port = Number(server.port);
-  const username = String(account.username || 'BotMadeByAkshit').trim();
-  const version = String(server.version || '1.21.11').trim();
-
-  if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
+  if (!hasValidServerConfig(config)) {
     console.error('[CONFIG] Invalid server IP or port in settings.json');
     return;
   }
 
+  clearBotTimers();
+  isConnecting = true;
+
   const options = {
-    host,
-    port,
-    username,
-    version,
+    host: config.host,
+    port: config.port,
+    username: config.username,
+    version: config.version,
     auth: String(account.type || 'offline').toLowerCase() === 'microsoft'
       ? 'microsoft'
       : 'offline'
   };
 
   console.log(
-    `[BOT] Connecting to ${host}:${port} as ${username} using Java ${version}`
+    `[BOT] Connecting to ${config.host}:${config.port} as ${config.username} using Java ${config.version}`
   );
 
-  bot = mineflayer.createBot(options);
+  let activeBot;
+  try {
+    activeBot = mineflayer.createBot(options);
+    bot = activeBot;
+  } catch (error) {
+    isConnecting = false;
+    console.log(`[BOT CREATE ERROR] ${error?.message || error}`);
+    scheduleReconnect();
+    return;
+  }
 
-  bot.once('login', () => {
+  activeBot.once('login', () => {
     console.log('[BOT] Login accepted by the server.');
   });
 
-  bot.once('spawn', () => {
-    reconnectAttempt = 0;
-    console.log(`[BOT] Joined successfully as ${username}`);
-    startAntiAfk(bot);
-    startChatMessages(bot);
+  activeBot.on('spawn', () => {
+    isConnecting = false;
+    clearBotTimers(activeBot);
+    console.log(`[BOT] Joined successfully as ${config.username}`);
+    startRandomActions(activeBot);
+    startChatMessages(activeBot);
   });
 
   if (utils['chat-log'] !== false) {
-    bot.on('chat', (playerName, message) => {
+    activeBot.on('chat', (playerName, message) => {
       console.log(`[CHAT] <${playerName}> ${message}`);
     });
   }
 
-  bot.on('kicked', reason => {
+  activeBot.on('kicked', reason => {
     console.log(`[KICKED] ${formatReason(reason)}`);
   });
 
-  bot.on('error', error => {
+  activeBot.on('error', error => {
     console.log(`[ERROR] ${error?.message || error}`);
   });
 
-  bot.once('end', reason => {
+  activeBot.once('end', reason => {
     console.log(`[BOT] Disconnected: ${reason || 'unknown reason'}`);
-    clearBotTimers();
+    clearBotTimers(activeBot);
+    if (bot === activeBot) bot = undefined;
+    isConnecting = false;
     scheduleReconnect();
   });
 }
 
-createBot();
+connectWhenAvailable().catch(error => {
+  console.log(`[STARTUP ERROR] ${error?.message || error}`);
+  scheduleReconnect();
+});
 
 const selfPingUrl =
   process.env.SELF_PING_URL ||
