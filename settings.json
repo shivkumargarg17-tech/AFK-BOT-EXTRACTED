@@ -22,7 +22,43 @@
     },
     "anti-afk": {
       "enabled": true,
-      "sneak": true
+      "log-actions": true,
+      "summary-interval": 60,
+      "random-actions": {
+        "enabled": true,
+        "move": {
+          "chance": 1,
+          "min-delay": 2,
+          "max-delay": 6,
+          "min-duration": 0.8,
+          "max-duration": 2.5
+        },
+        "jump": {
+          "chance": 0.7,
+          "min-delay": 2,
+          "max-delay": 8,
+          "min-duration": 0.15,
+          "max-duration": 0.45
+        },
+        "crouch": {
+          "chance": 0.5,
+          "min-delay": 4,
+          "max-delay": 12,
+          "min-duration": 0.5,
+          "max-duration": 2.5
+        },
+        "punch": {
+          "chance": 0.75,
+          "min-delay": 2,
+          "max-delay": 10
+        }
+      }
+    },
+    "server-online-check": {
+      "enabled": true,
+      "min-delay": 30,
+      "max-delay": 60,
+      "timeout": 8
     },
     "chat-messages": {
       "enabled": false,
