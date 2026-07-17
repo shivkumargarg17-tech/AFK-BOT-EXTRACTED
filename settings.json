@@ -25,18 +25,10 @@
       "sneak": true
     },
     "chat-messages": {
-      "enabled": true,
-      "repeat": true,
+      "enabled": false,
+      "repeat": false,
       "repeat-delay": 60,
-      "messages": [
-        "While you were buying realms, I was buying knowledge 😎",
-        "Call me server admin, because I technically am 🤣",
-        "You spent ₹20k on games, I spent ₹0 but still win 💀",
-        "24/7 online unlike some people's IQ 💀🤣",
-        "Not paid to win, just coded to rule 🔥",
-        "This bot runs smoother than your gameplay 💀",
-        "Imagine paying for lag 💀"
-      ]
+      "messages": []
     },
     "chat-log": true,
     "auto-reconnect": true,
