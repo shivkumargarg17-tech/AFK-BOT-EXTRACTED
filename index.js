@@ -1,142 +1,181 @@
-// index.js - AFK Roaster Bot (CommonJS)
-// Bot name: CodedByLegend
-// Server: HOGAKING.aternos.me:19754
-// Works with Render + self-ping for uptime
+'use strict';
 
-const mineflayer = require('mineflayer');
 const express = require('express');
+const mineflayer = require('mineflayer');
+const settings = require('./settings.json');
 
 const app = express();
+const webPort = Number(process.env.PORT || 10000);
 
-// --- Web server for Render / uptime monitors ---
-app.get('/', (req, res) => res.send('Bot is running 24/7 - CodedByLegend'));
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => console.log(`Web server listening on port ${PORT}`));
+app.get('/', (_req, res) => {
+  res.send('Minecraft AFK bot service is running.');
+});
 
-// --- Minecraft connection settings (already set to your server) ---
-const MINECRAFT_HOST = 'SURVIVALSMP674.aternos.me';
-const MINECRAFT_PORT = 45544;
-const BOT_USERNAME = 'CodedByLegend';
+app.listen(webPort, () => {
+  console.log(`[WEB] Listening on port ${webPort}`);
+});
 
-// --- Roast lines (no emojis) ---
-const roastLines = [
-  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
-  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
-  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
-  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
-  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
-  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
-  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
-  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
-  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
-  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
-  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
-  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
-  "HI GUYS ITS ME I AM A BOT CREATED BY A LEGEND NAMED KIRA AND CAN AFK ALMOST 24/7 TO KEEP THE SERVER ON!",
-  "I HAD SOME ROAST MESSAGES IN HINDI BUT KIRA DISABLED IT SO YOU GUYS DONT KICK ME AND ALSO FORGOT TO TELL YOU, I CAN AUTO REJOIN"
-];
+const account = settings['bot-account'] || {};
+const server = settings.server || {};
+const utils = settings.utils || {};
+const antiAfk = utils['anti-afk'] || {};
+const chatConfig = utils['chat-messages'] || {};
 
-// --- Create bot function (so we can reconnect cleanly) ---
-function createBot() {
-  const bot = mineflayer.createBot({
-    host: MINECRAFT_HOST,
-    port: MINECRAFT_PORT,
-    username: BOT_USERNAME,
-    // version: false // optional: auto detect. Remove/comment if you must pin version.
-  });
+const reconnectEnabled = utils['auto-reconnect'] !== false;
+const reconnectDelayMs = Math.max(
+  5000,
+  Number(utils['auto-reconnect-delay'] || 30000)
+);
 
-  // When bot spawns
-  bot.once('spawn', () => {
-    console.log(`[BOT] Joined server successfully as ${BOT_USERNAME}`);
-  });
+let bot;
+let reconnectTimer;
+let antiAfkTimer;
+let chatTimer;
+let sneakState = false;
 
-  // Send a random roast (if in-game) every 60 seconds
-  let roastTimer = null;
-  function startRoasts() {
-    if (roastTimer) clearInterval(roastTimer);
-    roastTimer = setInterval(() => {
-      try {
-        if (bot && bot.player && bot.chat) {
-          const msg = roastLines[Math.floor(Math.random() * roastLines.length)];
-          bot.chat(msg);
-          console.log('[ROAST] Sent:', msg);
-        }
-      } catch (e) {
-        console.log('[ROAST] Error sending roast:', e && e.message);
-      }
-    }, 60 * 1000); // 60s
-  }
-
-  // Small movement every 1s to avoid AFK detection
-  let moveTimer = null;
-  function startMovement() {
-    if (moveTimer) clearInterval(moveTimer);
-    moveTimer = setInterval(() => {
-      try {
-        if (!bot || !bot.entity) return;
-        // look around randomly and step forward briefly
-        bot.look(Math.random() * Math.PI * 2, 0);
-        bot.setControlState('forward', true);
-        setTimeout(() => bot.setControlState('forward', false), 300); // move ~300ms
-      } catch (e) {
-        // ignore
-      }
-    }, 1000); // every 1 second
-  }
-
-  // Start modules when spawn
-  bot.on('spawn', () => {
-    startRoasts();
-    startMovement();
-  });
-
-  // Logging helpful events
-  bot.on('chat', (username, message) => {
-    console.log(`[CHAT] <${username}> ${message}`);
-  });
-
-  bot.on('kicked', (reason) => {
-    console.log('[KICKED] Reason:', reason);
-  });
-
-  bot.on('death', () => {
-    console.log('[EVENT] Bot died; waiting to respawn.');
-  });
-
-  bot.on('respawn', () => {
-    console.log('[EVENT] Bot respawned.');
-  });
-
-  bot.on('end', () => {
-    console.log('[INFO] Bot disconnected. Cleaning up timers and will reconnect in 10s...');
-    if (roastTimer) clearInterval(roastTimer);
-    if (moveTimer) clearInterval(moveTimer);
-    // reconnect after 10s
-    setTimeout(() => {
-      createBot();
-    }, 10 * 1000);
-  });
-
-  bot.on('error', (err) => {
-    console.log('[ERROR]', err && err.message ? err.message : err);
-  });
-
-  // Optional: if server forces duplicate logins, attempt reconnect after a bit
-  bot.on('kicked', (reason) => {
-    console.log('[KICKED EVENT] ', reason);
-  });
-
-  return bot;
+function clearBotTimers() {
+  if (antiAfkTimer) clearInterval(antiAfkTimer);
+  if (chatTimer) clearInterval(chatTimer);
+  antiAfkTimer = undefined;
+  chatTimer = undefined;
 }
 
-// Start the first bot
+function formatReason(reason) {
+  if (typeof reason === 'string') return reason;
+  try {
+    return JSON.stringify(reason);
+  } catch {
+    return String(reason);
+  }
+}
+
+function scheduleReconnect() {
+  if (!reconnectEnabled || reconnectTimer) return;
+
+  console.log(`[BOT] Reconnecting in ${reconnectDelayMs / 1000}s...`);
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = undefined;
+    createBot();
+  }, reconnectDelayMs);
+}
+
+function startAntiAfk(activeBot) {
+  if (!antiAfk.enabled) return;
+
+  antiAfkTimer = setInterval(() => {
+    if (!activeBot.entity) return;
+
+    const nextYaw = activeBot.entity.yaw + 0.35;
+    activeBot.look(nextYaw, activeBot.entity.pitch, true).catch(() => {});
+    activeBot.swingArm('right');
+
+    if (antiAfk.sneak) {
+      sneakState = !sneakState;
+      activeBot.setControlState('sneak', sneakState);
+    }
+  }, 10000);
+}
+
+function startChatMessages(activeBot) {
+  const messages = Array.isArray(chatConfig.messages)
+    ? chatConfig.messages.filter(
+        message => typeof message === 'string' && message.trim().length > 0
+      )
+    : [];
+
+  if (!chatConfig.enabled || messages.length === 0) return;
+
+  const repeatDelayMs = Math.max(
+    30000,
+    Number(chatConfig['repeat-delay'] || 60) * 1000
+  );
+
+  const sendRandomMessage = () => {
+    if (!activeBot.player) return;
+    const message = messages[Math.floor(Math.random() * messages.length)]
+      .trim()
+      .slice(0, 240);
+    activeBot.chat(message);
+    console.log(`[CHAT SENT] ${message}`);
+  };
+
+  setTimeout(sendRandomMessage, 15000);
+
+  if (chatConfig.repeat !== false) {
+    chatTimer = setInterval(sendRandomMessage, repeatDelayMs);
+  }
+}
+
+function createBot() {
+  clearBotTimers();
+  sneakState = false;
+
+  const host = String(server.ip || '').trim();
+  const port = Number(server.port);
+  const username = String(account.username || 'BotMadeByAkshit').trim();
+  const version = String(server.version || '1.21.11').trim();
+
+  if (!host || !Number.isInteger(port) || port < 1 || port > 65535) {
+    console.error('[CONFIG] Invalid server IP or port in settings.json');
+    return;
+  }
+
+  const options = {
+    host,
+    port,
+    username,
+    version,
+    auth: String(account.type || 'offline').toLowerCase() === 'microsoft'
+      ? 'microsoft'
+      : 'offline'
+  };
+
+  console.log(
+    `[BOT] Connecting to ${host}:${port} as ${username} using Java ${version}`
+  );
+
+  bot = mineflayer.createBot(options);
+
+  bot.once('login', () => {
+    console.log('[BOT] Login accepted by the server.');
+  });
+
+  bot.once('spawn', () => {
+    console.log(`[BOT] Joined successfully as ${username}`);
+    startAntiAfk(bot);
+    startChatMessages(bot);
+  });
+
+  if (utils['chat-log'] !== false) {
+    bot.on('chat', (playerName, message) => {
+      console.log(`[CHAT] <${playerName}> ${message}`);
+    });
+  }
+
+  bot.on('kicked', reason => {
+    console.log(`[KICKED] ${formatReason(reason)}`);
+  });
+
+  bot.on('error', error => {
+    console.log(`[ERROR] ${error?.message || error}`);
+  });
+
+  bot.once('end', reason => {
+    console.log(`[BOT] Disconnected: ${reason || 'unknown reason'}`);
+    clearBotTimers();
+    scheduleReconnect();
+  });
+}
+
 createBot();
 
-// --- Self-ping to keep Render awake (uses global fetch) ---
-const SELF_PING_URL = 'https://afk-bot-extracted-for-render.onrender.com/'; // your render URL
+const selfPingUrl =
+  process.env.SELF_PING_URL ||
+  process.env.RENDER_EXTERNAL_URL ||
+  'https://aternos-bot-wre2.onrender.com/';
+
 setInterval(() => {
-  // Node 18+ has global fetch; if not available you can npm add node-fetch and require it.
-  fetch(SELF_PING_URL)
-    .then(() => console.log('[PING] Self-ping succeeded'))
-    .catch((e) => console.log('[PING] Self-ping failed:', e && e.message));
-}, 4 * 60 * 1000); // every 4 minutes
+  fetch(selfPingUrl)
+    .then(response => console.log(`[PING] ${response.status}`))
+    .catch(error => console.log(`[PING ERROR] ${error.message}`));
+}, 4 * 60 * 1000);
