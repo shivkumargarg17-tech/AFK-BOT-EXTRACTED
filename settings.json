@@ -7,8 +7,8 @@
   "server": {
     "ip": "BPSfriends.aternos.me",
     "port": 11917,
-    "version": "",
-    "use-srv": true
+    "version": "1.21.11",
+    "use-srv": false
   },
   "position": {
     "enabled": false,
@@ -69,8 +69,8 @@
     },
     "chat-log": true,
     "auto-reconnect": true,
-    "auto-reconnect-delay": 30000,
-    "connect-timeout": 30,
+    "auto-reconnect-delay": 10000,
+    "connect-timeout": 35,
     "keepalive-timeout": 300
   }
 }
