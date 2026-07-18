@@ -1,79 +1,109 @@
 'use strict';
 
-const dns = require('dns');
+const mineflayer = require('mineflayer');
+const settings = require('./settings.json');
 
-try {
-  dns.setDefaultResultOrder('ipv4first');
-} catch (error) {
-  console.log(`[DNS] Could not enable IPv4-first resolution: ${error.message}`);
-}
+const watchdogConfig = settings.utils?.['connection-watchdog'] || {};
+const watchdogEnabled = watchdogConfig.enabled !== false;
+const checkIntervalMs = Math.max(
+  10000,
+  Number(watchdogConfig['check-interval'] || 20) * 1000
+);
+const maxPacketSilenceMs = Math.max(
+  45000,
+  Number(watchdogConfig['max-packet-silence'] || 90) * 1000
+);
+const tcpKeepAliveDelayMs = Math.max(
+  10000,
+  Number(watchdogConfig['tcp-keepalive-delay'] || 30) * 1000
+);
 
-// node-minecraft-protocol uses dns.resolveSrv() for Minecraft domains. Try
-// fresh public resolvers first to avoid stale Aternos records, but always fall
-// back to Render's system DNS if direct public-DNS traffic is unavailable.
-const originalResolveSrv = dns.resolveSrv.bind(dns);
-const publicResolver = new dns.Resolver();
-publicResolver.setServers(['1.1.1.1', '8.8.8.8']);
+const originalCreateBot = mineflayer.createBot.bind(mineflayer);
 
-dns.resolveSrv = function resolveSrvWithFallback(hostname, callback) {
-  let finished = false;
+mineflayer.createBot = function createBotWithLivenessWatchdog(options = {}) {
+  const bot = originalCreateBot(options);
 
-  const finishWithSystemDns = () => {
-    if (finished) return;
-    finished = true;
-    originalResolveSrv(hostname, callback);
+  if (!watchdogEnabled) return bot;
+
+  const client = bot._client;
+  let lastPacketAt = Date.now();
+  let watchdogTimer;
+  let terminating = false;
+
+  const markPacketReceived = () => {
+    lastPacketAt = Date.now();
   };
 
-  const timeout = setTimeout(finishWithSystemDns, 5000);
+  client?.on('packet', markPacketReceived);
 
-  publicResolver.resolveSrv(hostname, (error, records) => {
-    if (finished) return;
-    clearTimeout(timeout);
+  client?.once('connect', () => {
+    markPacketReceived();
 
-    if (!error && Array.isArray(records) && records.length > 0) {
-      finished = true;
-      console.log(`[DNS] Public DNS resolved ${hostname}.`);
-      callback(null, records);
-      return;
+    const socket = client.socket;
+    try {
+      socket?.setKeepAlive(true, tcpKeepAliveDelayMs);
+      socket?.setNoDelay(true);
+      console.log(
+        `[WATCHDOG] TCP keepalive enabled (${Math.round(tcpKeepAliveDelayMs / 1000)}s).`
+      );
+    } catch (error) {
+      console.log(`[WATCHDOG] Could not configure TCP keepalive: ${error.message}`);
     }
-
-    console.log(
-      `[DNS] Public DNS could not resolve ${hostname}; using system DNS.`
-    );
-    finishWithSystemDns();
   });
-};
 
-const mineflayer = require('mineflayer');
-const originalCreateBot = mineflayer.createBot;
-
-mineflayer.createBot = function createReliableBot(options = {}) {
-  const patched = { ...options };
-  const host = String(patched.host || '').trim();
-
-  if (/\.aternos\.me$/i.test(host)) {
-    // node-minecraft-protocol only performs Minecraft SRV lookup on port 25565.
-    patched.port = 25565;
-
-    // Preserve the public Aternos hostname in the Minecraft handshake even
-    // when DNS resolves it to a changing backend hostname and port.
-    patched.fakeHost = host;
-
-    // Let Mineflayer ping the live endpoint and select its actual protocol.
-    patched.version = false;
-
-    // Aternos can lag during busy periods; avoid the default 30-second timeout.
-    patched.keepAlive = true;
-    patched.checkTimeoutInterval = Math.max(
-      Number(patched.checkTimeoutInterval) || 0,
-      300000
-    );
+  bot.once('spawn', () => {
+    markPacketReceived();
 
     console.log(
-      `[DNS] Aternos connection mode enabled for ${host}: ` +
-      'SRV lookup, original handshake host, version auto-detection.'
+      `[WATCHDOG] Packet monitor active: checking every ` +
+      `${Math.round(checkIntervalMs / 1000)}s; reconnect after ` +
+      `${Math.round(maxPacketSilenceMs / 1000)}s without server packets.`
     );
-  }
 
-  return originalCreateBot(patched);
+    watchdogTimer = setInterval(() => {
+      if (terminating) return;
+
+      const socket = client?.socket;
+      const packetSilenceMs = Date.now() - lastPacketAt;
+      const socketClosed = !socket || socket.destroyed || !socket.writable;
+
+      if (!socketClosed && packetSilenceMs <= maxPacketSilenceMs) return;
+
+      terminating = true;
+
+      const reason = socketClosed
+        ? 'Minecraft socket is no longer writable'
+        : `no incoming Minecraft packets for ${Math.round(packetSilenceMs / 1000)}s`;
+
+      console.log(
+        `[WATCHDOG] Ghost connection detected (${reason}). ` +
+        'Closing it so the normal reconnect system can create a fresh bot.'
+      );
+
+      try {
+        bot.clearControlStates();
+      } catch {
+        // The bot may already be partially disconnected.
+      }
+
+      try {
+        socket?.destroy(new Error('Minecraft packet-liveness timeout'));
+      } catch {
+        try {
+          bot.end('packetLivenessTimeout');
+        } catch {
+          // The normal end/error handlers will handle any remaining cleanup.
+        }
+      }
+    }, checkIntervalMs);
+
+    watchdogTimer.unref?.();
+  });
+
+  bot.once('end', () => {
+    if (watchdogTimer) clearInterval(watchdogTimer);
+    client?.removeListener('packet', markPacketReceived);
+  });
+
+  return bot;
 };
