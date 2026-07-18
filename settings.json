@@ -59,13 +59,20 @@
       "public-dns": true,
       "srv-fallback": true,
       "dns-timeout": 5,
-      "route-timeout": 35
+      "route-timeout": 25
     },
     "connection-watchdog": {
       "enabled": true,
       "check-interval": 20,
       "max-packet-silence": 120,
       "tcp-keepalive-delay": 30
+    },
+    "server-status-watchdog": {
+      "enabled": true,
+      "interval": 30,
+      "timeout": 8,
+      "max-failures": 3,
+      "startup-grace": 15
     },
     "server-online-check": {
       "enabled": false,
