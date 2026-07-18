@@ -1,18 +1,19 @@
 {
   "name": "bot-made-by-akshit",
-  "version": "3.2.0",
+  "version": "4.0.0",
   "private": true,
   "description": "Reliable Minecraft Java AFK bot hosted on Render",
   "main": "service.js",
   "scripts": {
-    "start": "node service.js"
+    "start": "node service.js",
+    "check": "node --check service.js && node --check actions.js"
   },
   "engines": {
     "node": "24.14.1"
   },
   "dependencies": {
     "express": "4.21.2",
-    "minecraft-protocol": "1.66.0",
+    "minecraft-protocol": "1.66.2",
     "mineflayer": "4.37.1"
   }
 }
