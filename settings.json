@@ -55,6 +55,12 @@
         }
       }
     },
+    "connection-watchdog": {
+      "enabled": true,
+      "check-interval": 20,
+      "max-packet-silence": 90,
+      "tcp-keepalive-delay": 30
+    },
     "server-online-check": {
       "enabled": false,
       "min-delay": 30,
