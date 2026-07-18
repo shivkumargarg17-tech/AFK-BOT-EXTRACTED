@@ -26,10 +26,12 @@ function createAntiAfkController(bot, antiAfk = {}, isHealthy = () => true) {
   let stopped = false;
 
   const schedule = (fn, delay) => {
+    if (stopped) return;
     const timer = setTimeout(() => {
       timers.delete(timer);
       if (!stopped) fn();
-    }, delay);
+    }, Math.max(50, delay));
+    timer.unref?.();
     timers.add(timer);
   };
 
@@ -52,29 +54,44 @@ function createAntiAfkController(bot, antiAfk = {}, isHealthy = () => true) {
     };
   };
 
+  const retryWhenUnhealthy = fn => schedule(fn, 1000);
+
   const movement = () => {
     const config = cfg('move', {
       chance: 1,
-      minDelay: 2,
-      maxDelay: 6,
-      minDuration: 0.8,
-      maxDuration: 2.5
+      minDelay: 3,
+      maxDelay: 7,
+      minDuration: 0.35,
+      maxDuration: 0.8
     });
+
     schedule(() => {
-      if (!active()) return;
+      if (!active()) return retryWhenUnhealthy(movement);
       if (Math.random() > config.chance) return movement();
-      const directions = ['forward', 'back', 'left', 'right'];
-      const direction = directions[Math.floor(Math.random() * directions.length)];
+
+      const pairs = [
+        ['forward', 'back'],
+        ['back', 'forward'],
+        ['left', 'right'],
+        ['right', 'left']
+      ];
+      const [first, opposite] = pairs[Math.floor(Math.random() * pairs.length)];
       const duration = delayMs(config.minDuration, config.maxDuration);
-      bot.look(random(-Math.PI, Math.PI), random(-0.2, 0.2), true).catch(() => {});
-      bot.setControlState(direction, true);
-      bot.setControlState('sprint', direction === 'forward');
-      log('move', `${direction}, ${(duration / 1000).toFixed(1)}s`);
+
+      bot.look(random(-Math.PI, Math.PI), random(-0.15, 0.15), true).catch(() => {});
+      bot.setControlState(first, true);
+      log('move', `${first}+${opposite}, ${(duration / 1000).toFixed(1)}s each`);
+
       schedule(() => {
-        if (!active()) return;
-        bot.setControlState(direction, false);
-        bot.setControlState('sprint', false);
-        movement();
+        bot.setControlState(first, false);
+        if (!active()) return retryWhenUnhealthy(movement);
+
+        bot.setControlState(opposite, true);
+        schedule(() => {
+          bot.setControlState(opposite, false);
+          if (active()) movement();
+          else retryWhenUnhealthy(movement);
+        }, duration);
       }, duration);
     }, delayMs(config.minDelay, config.maxDelay));
   };
@@ -83,15 +100,17 @@ function createAntiAfkController(bot, antiAfk = {}, isHealthy = () => true) {
     const run = () => {
       const config = cfg(name, defaults);
       schedule(() => {
-        if (!active()) return;
+        if (!active()) return retryWhenUnhealthy(run);
+
         if (Math.random() <= config.chance) {
           const duration = delayMs(config.minDuration, config.maxDuration);
           bot.setControlState(control, true);
           log(name, name === 'crouch' ? `${(duration / 1000).toFixed(1)}s` : '');
           schedule(() => {
-            if (active()) bot.setControlState(control, false);
+            try { bot.setControlState(control, false); } catch {}
           }, duration);
         }
+
         run();
       }, delayMs(config.minDelay, config.maxDelay));
     };
@@ -99,9 +118,9 @@ function createAntiAfkController(bot, antiAfk = {}, isHealthy = () => true) {
   };
 
   const punch = () => {
-    const config = cfg('punch', { chance: 0.75, minDelay: 2, maxDelay: 10 });
+    const config = cfg('punch', { chance: 0.65, minDelay: 7, maxDelay: 16 });
     schedule(() => {
-      if (!active()) return;
+      if (!active()) return retryWhenUnhealthy(punch);
       if (Math.random() <= config.chance) {
         bot.swingArm('right');
         log('punch');
@@ -111,9 +130,9 @@ function createAntiAfkController(bot, antiAfk = {}, isHealthy = () => true) {
   };
 
   const summary = () => {
-    const seconds = Math.max(15, number(antiAfk['summary-interval'], 60));
+    const seconds = Math.max(30, number(antiAfk['summary-interval'], 300));
     schedule(() => {
-      if (!active()) return;
+      if (!active()) return retryWhenUnhealthy(summary);
       const total = Object.values(counts).reduce((sum, value) => sum + value, 0);
       const details = Object.entries(counts)
         .map(([name, value]) => `${name}=${value} (${total ? ((value / total) * 100).toFixed(1) : '0.0'}%)`)
@@ -127,18 +146,18 @@ function createAntiAfkController(bot, antiAfk = {}, isHealthy = () => true) {
     if (!antiAfk.enabled || randomActions.enabled === false) return;
     movement();
     repeatingAction('jump', 'jump', {
-      chance: 0.7,
-      minDelay: 2,
-      maxDelay: 8,
+      chance: 0.75,
+      minDelay: 5,
+      maxDelay: 12,
       minDuration: 0.15,
-      maxDuration: 0.45
+      maxDuration: 0.35
     });
     repeatingAction('crouch', 'sneak', {
       chance: 0.5,
-      minDelay: 4,
-      maxDelay: 12,
+      minDelay: 10,
+      maxDelay: 20,
       minDuration: 0.5,
-      maxDuration: 2.5
+      maxDuration: 1.5
     });
     punch();
     summary();
@@ -149,11 +168,7 @@ function createAntiAfkController(bot, antiAfk = {}, isHealthy = () => true) {
     stopped = true;
     for (const timer of timers) clearTimeout(timer);
     timers.clear();
-    try {
-      bot.clearControlStates();
-    } catch {
-      // The socket may already be gone.
-    }
+    try { bot.clearControlStates(); } catch {}
   };
 
   return { start, stop, counts };
