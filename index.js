@@ -6,6 +6,7 @@ const settings = require('./settings.json');
 
 const app = express();
 const webPort = Number(process.env.PORT || 10000);
+const startedAt = Date.now();
 
 const account = settings['bot-account'] || {};
 const server = settings.server || {};
@@ -13,36 +14,125 @@ const utils = settings.utils || {};
 const antiAfk = utils['anti-afk'] || {};
 const randomActions = antiAfk['random-actions'] || {};
 const chatConfig = utils['chat-messages'] || {};
+const watchdogConfig = utils['connection-watchdog'] || {};
 
 const reconnectEnabled = utils['auto-reconnect'] !== false;
-const reconnectDelayMs = Math.max(
-  5000,
-  Number(utils['auto-reconnect-delay'] || 10000)
-);
-const connectTimeoutMs = Math.max(
-  20000,
-  Number(utils['connect-timeout'] || 45) * 1000
-);
-const keepAliveTimeoutMs = Math.max(
-  60000,
-  Number(utils['keepalive-timeout'] || 300) * 1000
-);
+const reconnectDelayMs = Math.max(5000, Number(utils['auto-reconnect-delay'] || 10000));
+const connectTimeoutMs = Math.max(20000, Number(utils['connect-timeout'] || 45) * 1000);
+const keepAliveTimeoutMs = Math.max(60000, Number(utils['keepalive-timeout'] || 120) * 1000);
+const livenessCheckMs = Math.max(10000, Number(watchdogConfig['check-interval'] || 20) * 1000);
+const maxPacketSilenceMs = Math.max(45000, Number(watchdogConfig['max-packet-silence'] || 90) * 1000);
+const tcpKeepAliveDelayMs = Math.max(10000, Number(watchdogConfig['tcp-keepalive-delay'] || 30) * 1000);
 
 let bot;
 let reconnectTimer;
-let connectWatchdog;
-let isConnecting = false;
-const botTimers = new Set();
+let shuttingDown = false;
+let generation = 0;
+const actionTimers = new Set();
 const actionCounts = { move: 0, jump: 0, crouch: 0, punch: 0 };
 
-app.get('/', (_req, res) => {
-  res.json({
+const runtime = {
+  phase: 'starting',
+  connectedAt: null,
+  connectingSince: null,
+  nextReconnectAt: null,
+  lastPacketAt: null,
+  lastError: null,
+  lastKickReason: null,
+  lastDisconnectReason: null,
+  remoteEndpoint: null,
+  connectionAttempts: 0,
+  successfulJoins: 0,
+  disconnects: 0
+};
+
+function serverConfig() {
+  return {
+    host: String(server.ip || '').trim(),
+    port: Number(server.port),
+    version: String(server.version || '').trim(),
+    username: String(account.username || 'AfkBotByAkshit').trim(),
+    auth: String(account.type || 'offline').toLowerCase() === 'microsoft'
+      ? 'microsoft'
+      : 'offline'
+  };
+}
+
+function validServerConfig(config) {
+  return Boolean(
+    config.host &&
+    Number.isInteger(config.port) &&
+    config.port >= 1 &&
+    config.port <= 65535 &&
+    config.username
+  );
+}
+
+function formatReason(reason) {
+  if (reason == null) return 'unknown reason';
+  if (typeof reason === 'string') return reason;
+  try {
+    return JSON.stringify(reason);
+  } catch {
+    return String(reason);
+  }
+}
+
+function socketIsUsable(activeBot = bot) {
+  const socket = activeBot?._client?.socket;
+  return Boolean(socket && !socket.destroyed && socket.writable);
+}
+
+function isHealthyConnection() {
+  if (runtime.phase !== 'online' || !bot?.player || !socketIsUsable(bot)) return false;
+  if (!runtime.lastPacketAt) return false;
+  return Date.now() - runtime.lastPacketAt <= maxPacketSilenceMs;
+}
+
+function healthPayload() {
+  const now = Date.now();
+  const config = serverConfig();
+  const connected = isHealthyConnection();
+
+  return {
     service: 'Minecraft AFK bot',
-    connected: Boolean(bot?.player),
-    connecting: isConnecting,
-    username: account.username || 'AfkBotByAkshit',
-    server: server.ip || null
-  });
+    healthy: connected,
+    connected,
+    connecting: runtime.phase === 'connecting',
+    phase: runtime.phase,
+    username: config.username,
+    server: `${config.host}:${config.port}`,
+    clientVersion: config.version || 'auto',
+    auth: config.auth,
+    remoteEndpoint: runtime.remoteEndpoint,
+    processUptimeSeconds: Math.floor((now - startedAt) / 1000),
+    connectedForSeconds: runtime.connectedAt
+      ? Math.floor((now - runtime.connectedAt) / 1000)
+      : null,
+    packetSilenceSeconds: runtime.lastPacketAt
+      ? Math.floor((now - runtime.lastPacketAt) / 1000)
+      : null,
+    nextReconnectAt: runtime.nextReconnectAt
+      ? new Date(runtime.nextReconnectAt).toISOString()
+      : null,
+    connectionAttempts: runtime.connectionAttempts,
+    successfulJoins: runtime.successfulJoins,
+    disconnects: runtime.disconnects,
+    lastDisconnectReason: runtime.lastDisconnectReason,
+    lastKickReason: runtime.lastKickReason,
+    lastError: runtime.lastError,
+    actions: { ...actionCounts },
+    checkedAt: new Date(now).toISOString()
+  };
+}
+
+app.get('/', (_req, res) => {
+  res.status(200).json(healthPayload());
+});
+
+app.get('/health', (_req, res) => {
+  const payload = healthPayload();
+  res.status(payload.healthy ? 200 : 503).json(payload);
 });
 
 app.listen(webPort, () => {
@@ -65,80 +155,34 @@ function clampChance(value, fallback) {
   return Math.min(1, Math.max(0, parsed));
 }
 
-function configuredServer() {
-  const host = String(server.ip || '').trim();
-  const configuredPort = Number(server.port);
-  const useSrv = server['use-srv'] !== false && /\.aternos\.me$/i.test(host);
-
-  return {
-    host,
-    configuredPort,
-    useSrv,
-    username: String(account.username || 'AfkBotByAkshit').trim(),
-    version: String(server.version || '').trim()
-  };
-}
-
-function validServerConfig(config) {
-  if (!config.host) return false;
-  if (config.useSrv) return true;
-  return Number.isInteger(config.configuredPort) &&
-    config.configuredPort >= 1 && config.configuredPort <= 65535;
-}
-
-function formatReason(reason) {
-  if (typeof reason === 'string') return reason;
-  try {
-    return JSON.stringify(reason);
-  } catch {
-    return String(reason);
-  }
-}
-
-function scheduleBotTimer(callback, delayMs) {
+function scheduleActionTimer(callback, delayMs) {
   const timer = setTimeout(() => {
-    botTimers.delete(timer);
+    actionTimers.delete(timer);
     callback();
   }, delayMs);
-  botTimers.add(timer);
+  actionTimers.add(timer);
   return timer;
 }
 
-function clearBotTimers(activeBot = bot) {
-  for (const timer of botTimers) clearTimeout(timer);
-  botTimers.clear();
+function clearActionTimers(activeBot = bot) {
+  for (const timer of actionTimers) clearTimeout(timer);
+  actionTimers.clear();
 
-  if (activeBot) {
-    try {
-      activeBot.clearControlStates();
-    } catch {
-      // The client may already be closed.
-    }
+  try {
+    activeBot?.clearControlStates();
+  } catch {
+    // The connection may already be closed.
   }
-}
-
-function clearConnectWatchdog() {
-  if (connectWatchdog) clearTimeout(connectWatchdog);
-  connectWatchdog = undefined;
 }
 
 function isActiveBot(activeBot) {
-  return bot === activeBot && Boolean(activeBot?.entity && activeBot?.player);
-}
-
-function scheduleReconnect(delayMs = reconnectDelayMs) {
-  if (!reconnectEnabled) {
-    console.log('[BOT] Auto-reconnect is disabled.');
-    return;
-  }
-
-  if (reconnectTimer || isConnecting || bot?.player) return;
-
-  console.log(`[BOT] Reconnecting in ${Math.round(delayMs / 1000)}s...`);
-  reconnectTimer = setTimeout(() => {
-    reconnectTimer = undefined;
-    createBot();
-  }, delayMs);
+  return Boolean(
+    bot === activeBot &&
+    runtime.phase === 'online' &&
+    activeBot?.entity &&
+    activeBot?.player &&
+    socketIsUsable(activeBot)
+  );
 }
 
 function actionConfig(name, defaults) {
@@ -168,7 +212,7 @@ function scheduleMovement(activeBot) {
     maxDuration: 2.5
   });
 
-  scheduleBotTimer(() => {
+  scheduleActionTimer(() => {
     if (!isActiveBot(activeBot)) return;
 
     if (Math.random() > config.chance) {
@@ -182,7 +226,7 @@ function scheduleMovement(activeBot) {
 
     activeBot.look(
       randomNumber(-Math.PI, Math.PI),
-      randomNumber(-0.18, 0.18),
+      randomNumber(-0.2, 0.2),
       true
     ).catch(() => {});
 
@@ -190,7 +234,7 @@ function scheduleMovement(activeBot) {
     activeBot.setControlState('sprint', direction === 'forward');
     logAction('move', `${direction}, ${(durationMs / 1000).toFixed(1)}s`);
 
-    scheduleBotTimer(() => {
+    scheduleActionTimer(() => {
       if (!isActiveBot(activeBot)) return;
       activeBot.setControlState(direction, false);
       activeBot.setControlState('sprint', false);
@@ -208,14 +252,14 @@ function scheduleJump(activeBot) {
     maxDuration: 0.45
   });
 
-  scheduleBotTimer(() => {
+  scheduleActionTimer(() => {
     if (!isActiveBot(activeBot)) return;
 
     if (Math.random() <= config.chance) {
       const durationMs = randomDelayMs(config.minDuration, config.maxDuration);
       activeBot.setControlState('jump', true);
       logAction('jump');
-      scheduleBotTimer(() => {
+      scheduleActionTimer(() => {
         if (isActiveBot(activeBot)) activeBot.setControlState('jump', false);
       }, durationMs);
     }
@@ -233,14 +277,14 @@ function scheduleCrouch(activeBot) {
     maxDuration: 2.5
   });
 
-  scheduleBotTimer(() => {
+  scheduleActionTimer(() => {
     if (!isActiveBot(activeBot)) return;
 
     if (Math.random() <= config.chance) {
       const durationMs = randomDelayMs(config.minDuration, config.maxDuration);
       activeBot.setControlState('sneak', true);
       logAction('crouch', `${(durationMs / 1000).toFixed(1)}s`);
-      scheduleBotTimer(() => {
+      scheduleActionTimer(() => {
         if (isActiveBot(activeBot)) activeBot.setControlState('sneak', false);
       }, durationMs);
     }
@@ -256,7 +300,7 @@ function schedulePunch(activeBot) {
     maxDelay: 10
   });
 
-  scheduleBotTimer(() => {
+  scheduleActionTimer(() => {
     if (!isActiveBot(activeBot)) return;
     if (Math.random() <= config.chance) {
       activeBot.swingArm('right');
@@ -269,7 +313,7 @@ function schedulePunch(activeBot) {
 function scheduleActionSummary(activeBot) {
   const summarySeconds = Math.max(15, Number(antiAfk['summary-interval'] || 60));
 
-  scheduleBotTimer(() => {
+  scheduleActionTimer(() => {
     if (!isActiveBot(activeBot)) return;
     const total = Object.values(actionCounts).reduce((sum, count) => sum + count, 0);
     const ratio = Object.entries(actionCounts)
@@ -316,11 +360,11 @@ function startChatMessages(activeBot) {
     console.log(`[CHAT SENT] ${message}`);
   };
 
-  scheduleBotTimer(sendRandomMessage, 15000);
+  scheduleActionTimer(sendRandomMessage, 15000);
 
   if (chatConfig.repeat !== false) {
     const scheduleNextMessage = () => {
-      scheduleBotTimer(() => {
+      scheduleActionTimer(() => {
         if (!isActiveBot(activeBot)) return;
         sendRandomMessage();
         scheduleNextMessage();
@@ -330,106 +374,215 @@ function startChatMessages(activeBot) {
   }
 }
 
-function createBot(config = configuredServer()) {
-  if (isConnecting || bot?.player) return;
+function scheduleReconnect(reason, delayMs = reconnectDelayMs) {
+  if (shuttingDown || !reconnectEnabled || reconnectTimer) return;
 
+  runtime.phase = 'reconnecting';
+  runtime.nextReconnectAt = Date.now() + delayMs;
+  console.log(
+    `[BOT] Reconnecting in ${Math.round(delayMs / 1000)}s` +
+    `${reason ? ` after ${reason}` : ''}...`
+  );
+
+  reconnectTimer = setTimeout(() => {
+    reconnectTimer = undefined;
+    runtime.nextReconnectAt = null;
+    connectBot();
+  }, delayMs);
+}
+
+function connectBot() {
+  if (shuttingDown || bot || runtime.phase === 'connecting') return;
+
+  const config = serverConfig();
   if (!validServerConfig(config)) {
-    console.error('[CONFIG] Invalid server address or fallback port in settings.json');
+    runtime.phase = 'configuration-error';
+    runtime.lastError = 'Invalid server address, port, or username in settings.json';
+    console.error(`[CONFIG] ${runtime.lastError}`);
     return;
   }
 
-  if (reconnectTimer) clearTimeout(reconnectTimer);
-  reconnectTimer = undefined;
-  clearBotTimers();
-  clearConnectWatchdog();
-  isConnecting = true;
-
-  const options = {
-    host: config.host,
-    username: config.username,
-    auth: String(account.type || 'offline').toLowerCase() === 'microsoft'
-      ? 'microsoft'
-      : 'offline',
-    keepAlive: true,
-    checkTimeoutInterval: keepAliveTimeoutMs,
-    logErrors: false,
-    hideErrors: true
-  };
-
-  if (config.version) options.version = config.version;
-
-  // Aternos changes the real backend host/port between server starts.
-  // Omitting port makes node-minecraft-protocol resolve the domain's SRV record.
-  if (!config.useSrv) options.port = config.configuredPort;
-
-  const target = config.useSrv
-    ? `${config.host} (SRV auto-resolve; configured port ${config.configuredPort} ignored)`
-    : `${config.host}:${config.configuredPort}`;
+  const connectionGeneration = ++generation;
+  runtime.phase = 'connecting';
+  runtime.connectingSince = Date.now();
+  runtime.nextReconnectAt = null;
+  runtime.remoteEndpoint = null;
+  runtime.connectionAttempts += 1;
 
   console.log(
-    `[BOT] Connecting to ${target} as ${config.username}` +
-    `${config.version ? ` using Java ${config.version}` : ' with version auto-detection'}`
+    `[BOT] Connecting to ${config.host}:${config.port} as ${config.username} ` +
+    `using Java ${config.version || 'auto'} (attempt ${runtime.connectionAttempts})`
   );
 
   let activeBot;
-  let spawned = false;
-
   try {
-    activeBot = mineflayer.createBot(options);
-    bot = activeBot;
+    activeBot = mineflayer.createBot({
+      host: config.host,
+      port: config.port,
+      username: config.username,
+      auth: config.auth,
+      version: config.version || false,
+      keepAlive: true,
+      checkTimeoutInterval: keepAliveTimeoutMs,
+      respawn: true,
+      logErrors: false,
+      hideErrors: true
+    });
   } catch (error) {
-    isConnecting = false;
-    bot = undefined;
-    console.log(`[BOT CREATE ERROR] ${error?.message || error}`);
-    scheduleReconnect();
+    runtime.phase = 'offline';
+    runtime.lastError = formatReason(error);
+    console.log(`[BOT CREATE ERROR] ${runtime.lastError}`);
+    scheduleReconnect('bot creation failure');
     return;
   }
 
-  activeBot._client?.once('connect', () => {
-    const socket = activeBot._client?.socket;
-    const remote = socket?.remoteAddress && socket?.remotePort
-      ? `${socket.remoteAddress}:${socket.remotePort}`
-      : 'resolved Minecraft endpoint';
-    console.log(`[NETWORK] TCP connection established to ${remote}.`);
-  });
+  bot = activeBot;
+  const client = activeBot._client;
+  let spawned = false;
+  let finalized = false;
+  let terminating = false;
+  let connectTimer;
+  let livenessTimer;
+  let forcedCleanupTimer;
+  let lastPacketAt = Date.now();
 
-  connectWatchdog = setTimeout(() => {
-    if (bot !== activeBot || spawned) return;
+  const markPacket = () => {
+    lastPacketAt = Date.now();
+    if (bot === activeBot && generation === connectionGeneration) {
+      runtime.lastPacketAt = lastPacketAt;
+    }
+  };
 
-    console.log(
-      `[CONNECT TIMEOUT] No spawn after ${Math.round(connectTimeoutMs / 1000)}s. ` +
-      'Closing this attempt and retrying...'
-    );
+  const clearConnectionTimers = () => {
+    if (connectTimer) clearTimeout(connectTimer);
+    if (livenessTimer) clearInterval(livenessTimer);
+    if (forcedCleanupTimer) clearTimeout(forcedCleanupTimer);
+    connectTimer = undefined;
+    livenessTimer = undefined;
+    forcedCleanupTimer = undefined;
+  };
 
-    clearConnectWatchdog();
-    isConnecting = false;
+  const finalizeDisconnect = reason => {
+    if (finalized) return;
+    finalized = true;
+    clearConnectionTimers();
+    client?.removeListener('packet', markPacket);
+    clearActionTimers(activeBot);
+
     if (bot === activeBot) bot = undefined;
+    runtime.phase = shuttingDown ? 'stopped' : 'offline';
+    runtime.connectedAt = null;
+    runtime.connectingSince = null;
+    runtime.remoteEndpoint = null;
+    runtime.lastPacketAt = null;
+    runtime.lastDisconnectReason = formatReason(reason);
+    runtime.disconnects += 1;
+
+    console.log(`[BOT] Disconnected: ${runtime.lastDisconnectReason}`);
+    if (!shuttingDown) scheduleReconnect(runtime.lastDisconnectReason);
+  };
+
+  const terminateConnection = reason => {
+    if (finalized || terminating) return;
+    terminating = true;
+    runtime.phase = 'disconnecting';
+    clearActionTimers(activeBot);
+    console.log(`[RECOVERY] Closing connection: ${reason}`);
 
     try {
-      activeBot._client?.socket?.destroy(
-        new Error('Minecraft connection attempt timed out')
-      );
+      activeBot.end(reason);
     } catch {
       try {
-        activeBot.end('connectionTimeout');
+        client?.socket?.destroy();
       } catch {
-        // Ignore cleanup errors.
+        // Forced cleanup below guarantees the state machine can continue.
       }
     }
 
-    scheduleReconnect(5000);
+    forcedCleanupTimer = setTimeout(() => {
+      if (finalized) return;
+      console.log('[RECOVERY] Connection did not end normally; forcing socket cleanup.');
+      try {
+        client?.socket?.destroy();
+      } catch {
+        // Finalization below still releases the local connection state.
+      }
+      finalizeDisconnect(`${reason} (forced cleanup)`);
+    }, 3000);
+    forcedCleanupTimer.unref?.();
+  };
+
+  client?.on('packet', markPacket);
+
+  client?.once('connect', () => {
+    markPacket();
+    const socket = client.socket;
+    const remote = socket?.remoteAddress && socket?.remotePort
+      ? `${socket.remoteAddress}:${socket.remotePort}`
+      : `${config.host}:${config.port}`;
+    runtime.remoteEndpoint = remote;
+
+    try {
+      socket?.setKeepAlive(true, tcpKeepAliveDelayMs);
+      socket?.setNoDelay(true);
+    } catch (error) {
+      console.log(`[NETWORK] TCP tuning warning: ${formatReason(error)}`);
+    }
+
+    console.log(`[NETWORK] TCP connection established to ${remote}.`);
+  });
+
+  connectTimer = setTimeout(() => {
+    if (!spawned && !finalized) {
+      terminateConnection(
+        `no spawn after ${Math.round(connectTimeoutMs / 1000)} seconds`
+      );
+    }
   }, connectTimeoutMs);
+  connectTimer.unref?.();
 
   activeBot.once('login', () => {
     console.log('[BOT] Server accepted the offline-mode login handshake.');
   });
 
   activeBot.once('spawn', () => {
+    if (finalized) return;
     spawned = true;
-    isConnecting = false;
-    clearConnectWatchdog();
-    clearBotTimers(activeBot);
+    terminating = false;
+    if (connectTimer) clearTimeout(connectTimer);
+    connectTimer = undefined;
+    markPacket();
+
+    runtime.phase = 'online';
+    runtime.connectedAt = Date.now();
+    runtime.connectingSince = null;
+    runtime.successfulJoins += 1;
+    runtime.lastError = null;
+    runtime.lastKickReason = null;
+
     console.log(`[BOT] Joined successfully as ${config.username}`);
+    console.log(
+      `[WATCHDOG] Monitoring packets every ${Math.round(livenessCheckMs / 1000)}s; ` +
+      `recovery after ${Math.round(maxPacketSilenceMs / 1000)}s of silence.`
+    );
+
+    livenessTimer = setInterval(() => {
+      if (finalized || terminating || !spawned) return;
+
+      if (!socketIsUsable(activeBot)) {
+        terminateConnection('Minecraft socket is closed or not writable');
+        return;
+      }
+
+      const silenceMs = Date.now() - lastPacketAt;
+      if (silenceMs > maxPacketSilenceMs) {
+        terminateConnection(
+          `no incoming Minecraft packets for ${Math.round(silenceMs / 1000)} seconds`
+        );
+      }
+    }, livenessCheckMs);
+    livenessTimer.unref?.();
+
     startRandomActions(activeBot);
     startChatMessages(activeBot);
   });
@@ -441,24 +594,36 @@ function createBot(config = configuredServer()) {
   }
 
   activeBot.on('kicked', reason => {
-    console.log(`[KICKED] ${formatReason(reason)}`);
+    const formatted = formatReason(reason);
+    runtime.lastKickReason = formatted;
+    console.log(`[KICKED] ${formatted}`);
+
+    setTimeout(() => {
+      if (!finalized) terminateConnection(`kicked: ${formatted}`);
+    }, 1000).unref?.();
   });
 
   activeBot.on('error', error => {
-    console.log(`[ERROR] ${error?.message || error}`);
+    const message = formatReason(error);
+    runtime.lastError = message;
+    console.log(`[ERROR] ${message}`);
+
+    const fatalNetworkError =
+      /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket closed|socket hang up|keepalive|timed out|read ECONN/i
+        .test(message);
+
+    if (!spawned || fatalNetworkError) {
+      terminateConnection(`network error: ${message}`);
+    }
   });
 
   activeBot.once('end', reason => {
-    console.log(`[BOT] Disconnected: ${reason || 'unknown reason'}`);
-    clearConnectWatchdog();
-    clearBotTimers(activeBot);
-    if (bot === activeBot) bot = undefined;
-    isConnecting = false;
-    scheduleReconnect();
+    finalizeDisconnect(reason || 'connection ended');
   });
 }
 
-createBot();
+runtime.phase = 'offline';
+connectBot();
 
 const selfPingUrl =
   process.env.SELF_PING_URL ||
@@ -469,4 +634,41 @@ setInterval(() => {
   fetch(selfPingUrl)
     .then(response => console.log(`[PING] ${response.status}`))
     .catch(error => console.log(`[PING ERROR] ${error.message}`));
-}, 4 * 60 * 1000);
+}, 4 * 60 * 1000).unref?.();
+
+function gracefulShutdown(signal) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  runtime.phase = 'stopping';
+  console.log(`[PROCESS] ${signal} received; shutting down cleanly.`);
+
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  reconnectTimer = undefined;
+  clearActionTimers(bot);
+
+  try {
+    bot?.end('serviceShutdown');
+  } catch {
+    try {
+      bot?._client?.socket?.destroy();
+    } catch {
+      // Process exit below is the final fallback.
+    }
+  }
+
+  setTimeout(() => process.exit(0), 1500).unref?.();
+}
+
+process.once('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.once('SIGINT', () => gracefulShutdown('SIGINT'));
+
+process.on('unhandledRejection', reason => {
+  runtime.lastError = `Unhandled rejection: ${formatReason(reason)}`;
+  console.error(`[PROCESS] ${runtime.lastError}`);
+});
+
+process.on('uncaughtException', error => {
+  runtime.lastError = `Uncaught exception: ${formatReason(error)}`;
+  console.error(`[PROCESS] ${runtime.lastError}`);
+  setTimeout(() => process.exit(1), 1000).unref?.();
+});
