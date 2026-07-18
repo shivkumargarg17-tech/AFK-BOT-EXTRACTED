@@ -28,10 +28,67 @@ mineflayer.createBot = function createBotWithLivenessWatchdog(options = {}) {
   const client = bot._client;
   let lastPacketAt = Date.now();
   let watchdogTimer;
+  let cleanupFallbackTimer;
   let terminating = false;
+  let ended = false;
 
   const markPacketReceived = () => {
     lastPacketAt = Date.now();
+  };
+
+  const stopTimers = () => {
+    if (watchdogTimer) clearInterval(watchdogTimer);
+    if (cleanupFallbackTimer) clearTimeout(cleanupFallbackTimer);
+    watchdogTimer = undefined;
+    cleanupFallbackTimer = undefined;
+  };
+
+  const terminateGhostConnection = reason => {
+    if (terminating || ended) return;
+    terminating = true;
+
+    console.log(
+      `[WATCHDOG] Dead connection detected (${reason}). ` +
+      'Closing it so the normal reconnect system can create a fresh bot.'
+    );
+
+    try {
+      bot.clearControlStates();
+    } catch {
+      // The bot may already be partially disconnected.
+    }
+
+    const socket = client?.socket;
+    try {
+      if (socket && !socket.destroyed) {
+        socket.destroy(new Error('Minecraft connection liveness failure'));
+      } else {
+        bot.end('connectionLivenessFailure');
+      }
+    } catch {
+      try {
+        bot.end('connectionLivenessFailure');
+      } catch {
+        // The fallback below handles clients that remain stuck.
+      }
+    }
+
+    // A few socket failures emit error without end. Force the protocol client
+    // closed if the normal event chain has not completed promptly.
+    cleanupFallbackTimer = setTimeout(() => {
+      if (ended) return;
+      console.log('[WATCHDOG] Forcing cleanup of a connection that did not end normally.');
+      try {
+        client?.end('forcedLivenessCleanup');
+      } catch {
+        try {
+          client?.socket?.destroy();
+        } catch {
+          // Nothing else can be cleaned up here.
+        }
+      }
+    }, 5000);
+    cleanupFallbackTimer.unref?.();
   };
 
   client?.on('packet', markPacketReceived);
@@ -61,47 +118,41 @@ mineflayer.createBot = function createBotWithLivenessWatchdog(options = {}) {
     );
 
     watchdogTimer = setInterval(() => {
-      if (terminating) return;
+      if (terminating || ended) return;
 
       const socket = client?.socket;
       const packetSilenceMs = Date.now() - lastPacketAt;
       const socketClosed = !socket || socket.destroyed || !socket.writable;
 
-      if (!socketClosed && packetSilenceMs <= maxPacketSilenceMs) return;
-
-      terminating = true;
-
-      const reason = socketClosed
-        ? 'Minecraft socket is no longer writable'
-        : `no incoming Minecraft packets for ${Math.round(packetSilenceMs / 1000)}s`;
-
-      console.log(
-        `[WATCHDOG] Ghost connection detected (${reason}). ` +
-        'Closing it so the normal reconnect system can create a fresh bot.'
-      );
-
-      try {
-        bot.clearControlStates();
-      } catch {
-        // The bot may already be partially disconnected.
+      if (socketClosed) {
+        terminateGhostConnection('Minecraft socket is no longer writable');
+        return;
       }
 
-      try {
-        socket?.destroy(new Error('Minecraft packet-liveness timeout'));
-      } catch {
-        try {
-          bot.end('packetLivenessTimeout');
-        } catch {
-          // The normal end/error handlers will handle any remaining cleanup.
-        }
+      if (packetSilenceMs > maxPacketSilenceMs) {
+        terminateGhostConnection(
+          `no incoming Minecraft packets for ${Math.round(packetSilenceMs / 1000)}s`
+        );
       }
     }, checkIntervalMs);
 
     watchdogTimer.unref?.();
   });
 
+  bot.on('error', error => {
+    const message = String(error?.message || error || 'unknown network error');
+    const fatalNetworkError =
+      /ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket closed|socket hang up|keepalive|timed out/i
+        .test(message);
+
+    if (fatalNetworkError) {
+      terminateGhostConnection(`fatal network error: ${message}`);
+    }
+  });
+
   bot.once('end', () => {
-    if (watchdogTimer) clearInterval(watchdogTimer);
+    ended = true;
+    stopTimers();
     client?.removeListener('packet', markPacketReceived);
   });
 
