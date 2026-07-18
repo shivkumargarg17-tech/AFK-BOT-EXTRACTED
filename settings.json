@@ -55,10 +55,16 @@
         }
       }
     },
+    "connection-routing": {
+      "public-dns": true,
+      "srv-fallback": true,
+      "dns-timeout": 5,
+      "route-timeout": 35
+    },
     "connection-watchdog": {
       "enabled": true,
       "check-interval": 20,
-      "max-packet-silence": 90,
+      "max-packet-silence": 120,
       "tcp-keepalive-delay": 30
     },
     "server-online-check": {
@@ -77,6 +83,6 @@
     "auto-reconnect": true,
     "auto-reconnect-delay": 10000,
     "connect-timeout": 45,
-    "keepalive-timeout": 120
+    "keepalive-timeout": 300
   }
 }
