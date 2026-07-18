@@ -76,7 +76,7 @@
     "chat-log": true,
     "auto-reconnect": true,
     "auto-reconnect-delay": 10000,
-    "connect-timeout": 35,
-    "keepalive-timeout": 300
+    "connect-timeout": 45,
+    "keepalive-timeout": 120
   }
 }
