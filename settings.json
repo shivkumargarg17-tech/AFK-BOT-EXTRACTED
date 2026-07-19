@@ -62,10 +62,10 @@
       "dns-timeout": 4
     },
     "readiness-probe": {
-      "interval": 3,
+      "interval": 90,
       "tcp-timeout": 3,
       "dns-refresh": 15,
-      "spawn-timeout": 20,
+      "spawn-timeout": 90,
       "retry-after-disconnect": 3
     },
     "connection-watchdog": {
