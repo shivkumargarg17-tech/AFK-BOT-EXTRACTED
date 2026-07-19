@@ -71,7 +71,7 @@
     "connection-watchdog": {
       "enabled": true,
       "check-interval": 20,
-      "max-packet-silence": 120,
+      "max-packet-silence": 360,
       "tcp-keepalive-delay": 30
     },
     "server-status-watchdog": {
@@ -90,6 +90,6 @@
     "chat-log": true,
     "auto-reconnect": true,
     "auto-reconnect-delay": 3000,
-    "keepalive-timeout": 120
+    "keepalive-timeout": 300
   }
 }
