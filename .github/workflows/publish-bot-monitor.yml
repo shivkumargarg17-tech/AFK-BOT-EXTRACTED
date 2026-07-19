@@ -1,0 +1,173 @@
+name: Publish Bot Monitor Snapshot
+
+on:
+  schedule:
+    - cron: '1-56/5 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: publish-bot-monitor
+  cancel-in-progress: true
+
+jobs:
+  snapshot:
+    runs-on: ubuntu-latest
+    timeout-minutes: 4
+    env:
+      BASE_URL: https://aternos-bot-wre2.onrender.com
+      ISSUE_NUMBER: '1'
+      GH_TOKEN: ${{ github.token }}
+
+    steps:
+      - name: Fetch health and sanitized diagnostics
+        shell: bash
+        run: |
+          set -uo pipefail
+          mkdir -p monitor
+
+          fetch_endpoint() {
+            local name="$1"
+            local path="$2"
+            local code
+
+            code=$(curl \
+              --show-error \
+              --silent \
+              --location \
+              --max-time 90 \
+              --retry 2 \
+              --retry-delay 8 \
+              --retry-all-errors \
+              --output "monitor/${name}.body" \
+              --write-out '%{http_code}' \
+              "${BASE_URL}${path}?source=github-monitor&t=$(date +%s)") || code='000'
+
+            printf '%s' "$code" > "monitor/${name}.code"
+          }
+
+          fetch_endpoint health /health
+          fetch_endpoint diagnostics /diagnostics
+
+      - name: Build monitor comment
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import json
+          from datetime import datetime, timezone
+          from pathlib import Path
+
+          marker = '<!-- bot-monitor-latest -->'
+
+          def read(name, suffix):
+              path = Path('monitor') / f'{name}.{suffix}'
+              return path.read_text(errors='replace') if path.exists() else ''
+
+          def parse_json(text):
+              try:
+                  return json.loads(text)
+              except Exception:
+                  return None
+
+          health_code = read('health', 'code').strip() or '000'
+          diagnostics_code = read('diagnostics', 'code').strip() or '000'
+          health_raw = read('health', 'body')
+          diagnostics_raw = read('diagnostics', 'body')
+          health = parse_json(health_raw)
+          diagnostics = parse_json(diagnostics_raw)
+
+          checked_at = datetime.now(timezone.utc).isoformat(timespec='seconds')
+
+          if isinstance(health, dict):
+              healthy = bool(health.get('healthy'))
+              connected = bool(health.get('connected'))
+              phase = health.get('phase')
+              status = '✅ Healthy and connected' if healthy and connected else '⚠️ Unhealthy or disconnected'
+              summary = (
+                  f"{status}\n\n"
+                  f"- Phase: `{phase}`\n"
+                  f"- Connected: `{connected}`\n"
+                  f"- Packet silence: `{health.get('packetSilenceSeconds')}` seconds\n"
+                  f"- Last kick: `{health.get('lastKickReason')}`\n"
+                  f"- Last disconnect: `{health.get('lastDisconnectReason')}`\n"
+                  f"- Last error: `{health.get('lastError')}`"
+              )
+          else:
+              summary = '🚨 Health endpoint could not be parsed or reached.'
+
+          if isinstance(diagnostics, dict) and isinstance(diagnostics.get('entries'), list):
+              entries = diagnostics['entries'][-80:]
+              log_lines = []
+              for entry in entries:
+                  timestamp = str(entry.get('timestamp', '?'))
+                  level = str(entry.get('level', 'info')).upper()
+                  message = str(entry.get('message', '')).replace('```', "'''" )
+                  log_lines.append(f'{timestamp} [{level}] {message}')
+              logs_text = '\n'.join(log_lines) or '(No captured logs yet.)'
+          else:
+              logs_text = diagnostics_raw.strip() or '(Diagnostics endpoint unreachable.)'
+
+          logs_text = logs_text[-32000:]
+          health_text = (
+              json.dumps(health, indent=2, ensure_ascii=False)
+              if health is not None
+              else health_raw.strip() or '(Health endpoint unreachable.)'
+          )
+          health_text = health_text[:16000]
+
+          body = f'''{marker}
+          ## AFK Bot — latest automatic snapshot
+
+          **Checked:** `{checked_at}`  
+          **Health HTTP:** `{health_code}`  
+          **Diagnostics HTTP:** `{diagnostics_code}`
+
+          {summary}
+
+          <details>
+          <summary>Health JSON</summary>
+
+          ```json
+          {health_text}
+          ```
+          </details>
+
+          <details open>
+          <summary>Recent sanitized bot logs</summary>
+
+          ```text
+          {logs_text}
+          ```
+          </details>
+
+          This comment is replaced every five minutes by GitHub Actions.
+          '''
+
+          Path('monitor/comment.md').write_text(body)
+          PY
+
+      - name: Create or update latest snapshot comment
+        shell: bash
+        run: |
+          set -euo pipefail
+          marker='<!-- bot-monitor-latest -->'
+          comment_id=$(gh api \
+            --paginate \
+            "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
+            --jq ".[] | select(.body | contains(\"${marker}\")) | .id" \
+            | head -n 1)
+
+          if [ -n "$comment_id" ]; then
+            gh api \
+              --method PATCH \
+              "repos/${GITHUB_REPOSITORY}/issues/comments/${comment_id}" \
+              -F body=@monitor/comment.md >/dev/null
+          else
+            gh api \
+              --method POST \
+              "repos/${GITHUB_REPOSITORY}/issues/${ISSUE_NUMBER}/comments" \
+              -F body=@monitor/comment.md >/dev/null
+          fi
