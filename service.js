@@ -20,18 +20,19 @@ const config = {
   host: String(process.env.MC_HOST || server.ip || '').trim(),
   port: Number(process.env.MC_PORT || server.port),
   username: String(process.env.MC_USERNAME || account.username || 'AkshitAFKBot').trim(),
-  version: String(process.env.MC_VERSION || server.version || '').trim(),
-  auth: String(account.type || 'offline').toLowerCase() === 'microsoft' ? 'microsoft' : 'offline'
+  password: String(process.env.MC_PASSWORD || account.password || ''),
+  version: String(process.env.MC_VERSION ?? server.version ?? '').trim(),
+  auth: String(process.env.MC_AUTH || account.type || 'offline').toLowerCase()
 };
 
 const timings = {
-  reconnectAfterDisconnect: Math.max(5000, Number(utils['auto-reconnect-delay'] || 10000)),
-  reconnectAfterFailedJoin: Math.max(30000, Number(readiness.interval || 30) * 1000),
-  spawnTimeout: Math.max(45000, Number(readiness['spawn-timeout'] || 45) * 1000),
-  packetCheck: Math.max(10000, Number(watchdog['check-interval'] || 20) * 1000),
-  packetSilence: Math.max(180000, Number(watchdog['max-packet-silence'] || 180) * 1000),
+  reconnectBase: Math.max(2000, Number(utils['auto-reconnect-delay'] || 3000)),
+  reconnectMax: Math.max(30000, Number(utils['max-reconnect-delay'] || 120000)),
+  spawnTimeout: Math.max(90000, Number(readiness['spawn-timeout'] || 150) * 1000),
+  protocolTimeout: Math.max(300000, Number(utils['keepalive-timeout'] || 600) * 1000),
   tcpKeepAlive: Math.max(10000, Number(watchdog['tcp-keepalive-delay'] || 30) * 1000),
-  protocolKeepAlive: Math.max(60000, Number(utils['keepalive-timeout'] || 120) * 1000)
+  packetWarning: Math.max(180000, Number(watchdog['packet-warning'] || 180) * 1000),
+  packetCheck: Math.max(10000, Number(watchdog['check-interval'] || 20) * 1000)
 };
 
 const state = {
@@ -46,8 +47,10 @@ const state = {
   lastPacketAt: null,
   remoteEndpoint: null,
   connectionAttempts: 0,
+  consecutiveFailures: 0,
   successfulJoins: 0,
   disconnects: 0,
+  throttled: false,
   lastDisconnectReason: null,
   lastDisconnectAt: null,
   lastKickReason: null,
@@ -84,12 +87,12 @@ function actuallyConnected() {
   return Boolean(state.phase === 'online' && state.bot?.player && socketUsable());
 }
 
-function packetsFresh() {
-  return Boolean(state.lastPacketAt && Date.now() - state.lastPacketAt <= timings.packetSilence);
+function packetSilenceSeconds() {
+  return state.lastPacketAt ? Math.floor((Date.now() - state.lastPacketAt) / 1000) : null;
 }
 
 function healthy() {
-  return actuallyConnected() && packetsFresh();
+  return actuallyConnected();
 }
 
 function healthPayload() {
@@ -100,20 +103,19 @@ function healthPayload() {
     connected: actuallyConnected(),
     connecting: ['connecting', 'logging-in', 'reconnecting', 'waiting-for-server'].includes(state.phase),
     phase: state.phase,
-    connectionMode: 'direct-mineflayer',
+    connectionMode: 'slobos-style-direct',
     username: config.username,
     server: `${config.host}:${config.port}`,
-    clientVersion: config.version || 'auto',
+    clientVersion: config.version || 'auto-detect',
     auth: config.auth,
-    activeRoute: `direct (${config.host}:${config.port})`,
-    availableRoutes: [`direct (${config.host}:${config.port})`],
     remoteEndpoint: state.remoteEndpoint,
     processUptimeSeconds: Math.floor((now - startedAt) / 1000),
     connectedForSeconds: state.connectedAt ? Math.floor((now - state.connectedAt) / 1000) : null,
-    packetSilenceSeconds: state.lastPacketAt ? Math.floor((now - state.lastPacketAt) / 1000) : null,
+    packetSilenceSeconds: packetSilenceSeconds(),
     connectingForSeconds: state.connectingSince ? Math.floor((now - state.connectingSince) / 1000) : null,
     nextReconnectAt: state.nextReconnectAt ? new Date(state.nextReconnectAt).toISOString() : null,
     connectionAttempts: state.connectionAttempts,
+    consecutiveFailures: state.consecutiveFailures,
     successfulJoins: state.successfulJoins,
     disconnects: state.disconnects,
     lastDisconnectReason: state.lastDisconnectReason,
@@ -122,10 +124,6 @@ function healthPayload() {
     lastKickAt: state.lastKickAt,
     lastError: state.lastError,
     lastErrorAt: state.lastErrorAt,
-    serverStatus: {
-      enabled: false,
-      mode: 'direct connection; no separate status probe'
-    },
     actions: { ...state.actionCounts },
     checkedAt: new Date(now).toISOString()
   };
@@ -138,35 +136,65 @@ app.get('/health', (_req, res) => {
   const payload = healthPayload();
   res.status(payload.healthy ? 200 : 503).json(payload);
 });
-app.listen(webPort, () => console.log(`[WEB] Listening on port ${webPort}`));
+app.listen(webPort, '0.0.0.0', () => console.log(`[WEB] Listening on port ${webPort}`));
 
 function clearReconnectTimer() {
-  clearTimeout(state.reconnectTimer);
+  if (state.reconnectTimer) clearTimeout(state.reconnectTimer);
   state.reconnectTimer = null;
   state.nextReconnectAt = null;
 }
 
-function scheduleReconnect(delay, reason) {
+function reconnectDelay() {
+  if (state.throttled) {
+    state.throttled = false;
+    return 60000 + Math.floor(Math.random() * 60000);
+  }
+
+  const exponential = timings.reconnectBase * Math.pow(2, Math.min(state.consecutiveFailures, 8));
+  return Math.min(exponential, timings.reconnectMax) + Math.floor(Math.random() * 2000);
+}
+
+function scheduleReconnect(reason) {
   if (state.stopping || state.reconnectTimer || state.bot) return;
-  const safeDelay = Math.max(1000, delay);
+
+  const delay = reconnectDelay();
   state.phase = state.successfulJoins > 0 ? 'reconnecting' : 'waiting-for-server';
-  state.nextReconnectAt = Date.now() + safeDelay;
-  console.log(`[RECONNECT] Next direct Mineflayer attempt in ${(safeDelay / 1000).toFixed(1)}s after ${reasonText(reason)}.`);
+  state.nextReconnectAt = Date.now() + delay;
+  console.log(`[RECONNECT] Next attempt in ${(delay / 1000).toFixed(1)}s after ${reasonText(reason)}.`);
+
   state.reconnectTimer = setTimeout(() => {
     state.reconnectTimer = null;
     state.nextReconnectAt = null;
     startBot();
-  }, safeDelay);
+  }, delay);
   state.reconnectTimer.unref?.();
 }
 
+function cleanupGhostBot(reason = 'cleanup before reconnect') {
+  const previous = state.bot;
+  if (!previous) return;
+
+  console.log(`[CLEANUP] Removing previous bot instance: ${reason}.`);
+  state.controller?.stop();
+  state.controller = null;
+
+  try { previous.clearControlStates?.(); } catch {}
+  try { previous.removeAllListeners(); } catch {}
+  try { previous._client?.removeAllListeners(); } catch {}
+  try { previous.end(reason); } catch {}
+  try { previous._client?.socket?.destroy(); } catch {}
+
+  if (state.bot === previous) state.bot = null;
+}
+
 function startBot() {
-  if (state.stopping || state.bot) return;
+  if (state.stopping) return;
   clearReconnectTimer();
+  cleanupGhostBot();
 
   if (!validConfig()) {
     state.phase = 'configuration-error';
-    state.lastError = 'Invalid server host, port, or username (Minecraft usernames must be at most 16 characters)';
+    state.lastError = 'Invalid host, port, or username (Minecraft usernames must be at most 16 characters)';
     state.lastErrorAt = new Date().toISOString();
     console.error(`[CONFIG] ${state.lastError}`);
     return;
@@ -175,7 +203,7 @@ function startBot() {
   state.phase = 'connecting';
   state.connectingSince = Date.now();
   state.connectionAttempts += 1;
-  console.log(`[BOT] Direct attempt ${state.connectionAttempts}: ${config.host}:${config.port} as ${config.username}, Java ${config.version || 'auto'}.`);
+  console.log(`[BOT] Slobos-style attempt ${state.connectionAttempts}: ${config.host}:${config.port} as ${config.username}, Java ${config.version || 'auto-detect'}.`);
 
   let bot;
   try {
@@ -183,20 +211,22 @@ function startBot() {
       host: config.host,
       port: config.port,
       username: config.username,
+      password: config.password || undefined,
       auth: config.auth,
       version: config.version || false,
       keepAlive: true,
-      checkTimeoutInterval: timings.protocolKeepAlive,
+      checkTimeoutInterval: timings.protocolTimeout,
       respawn: true,
-      logErrors: false,
-      hideErrors: true
+      logErrors: true,
+      hideErrors: false
     });
   } catch (error) {
     state.connectingSince = null;
+    state.consecutiveFailures += 1;
     state.lastError = reasonText(error);
     state.lastErrorAt = new Date().toISOString();
     console.error(`[BOT CREATE ERROR] ${state.lastError}`);
-    scheduleReconnect(timings.reconnectAfterFailedJoin, 'bot creation error');
+    scheduleReconnect('bot creation error');
     return;
   }
 
@@ -204,39 +234,28 @@ function startBot() {
   const client = bot._client;
   let spawned = false;
   let finished = false;
-  let closing = false;
-  let spawnTimer = null;
+  let connectionTimer = null;
   let packetTimer = null;
-  let forcedCloseTimer = null;
   let chatTimer = null;
+  let silenceWarningLogged = false;
 
   const markPacket = () => {
-    if (state.bot === bot) state.lastPacketAt = Date.now();
+    if (state.bot === bot) {
+      state.lastPacketAt = Date.now();
+      silenceWarningLogged = false;
+    }
   };
 
-  const clearConnectionTimers = () => {
-    clearTimeout(spawnTimer);
+  const clearAttemptTimers = () => {
+    clearTimeout(connectionTimer);
     clearInterval(packetTimer);
-    clearTimeout(forcedCloseTimer);
     clearTimeout(chatTimer);
-  };
-
-  const forceClose = reason => {
-    if (finished || closing) return;
-    closing = true;
-    console.log(`[RECOVERY] Closing direct connection: ${reasonText(reason)}`);
-    try { bot.end(reasonText(reason)); } catch {}
-    forcedCloseTimer = setTimeout(() => {
-      if (finished) return;
-      try { client?.socket?.destroy(); } catch {}
-    }, 1500);
-    forcedCloseTimer.unref?.();
   };
 
   const finish = reason => {
     if (finished) return;
     finished = true;
-    clearConnectionTimers();
+    clearAttemptTimers();
     client?.removeListener('packet', markPacket);
     state.controller?.stop();
     state.controller = null;
@@ -249,15 +268,18 @@ function startBot() {
     state.disconnects += 1;
     state.lastDisconnectReason = reasonText(reason);
     state.lastDisconnectAt = new Date().toISOString();
-    console.log(`[BOT] Direct connection ended: ${state.lastDisconnectReason}`);
+
+    if (!spawned) state.consecutiveFailures += 1;
+    else state.consecutiveFailures = 0;
+
+    console.log(`[BOT] Connection ended: ${state.lastDisconnectReason}`);
 
     if (state.stopping) {
       state.phase = 'stopped';
       return;
     }
 
-    const delay = spawned ? timings.reconnectAfterDisconnect : timings.reconnectAfterFailedJoin;
-    scheduleReconnect(delay, state.lastDisconnectReason);
+    scheduleReconnect(state.lastDisconnectReason);
   };
 
   client?.on('packet', markPacket);
@@ -268,51 +290,58 @@ function startBot() {
     state.remoteEndpoint = socket?.remoteAddress && socket?.remotePort
       ? `${socket.remoteAddress}:${socket.remotePort}`
       : `${config.host}:${config.port}`;
+
     try {
       socket?.setKeepAlive(true, timings.tcpKeepAlive);
       socket?.setNoDelay(true);
     } catch (error) {
       console.log(`[NETWORK] TCP tuning warning: ${reasonText(error)}`);
     }
+
     console.log(`[NETWORK] Direct TCP established to ${state.remoteEndpoint}.`);
   });
 
-  spawnTimer = setTimeout(() => {
-    if (!spawned && !finished) forceClose(`no spawn after ${Math.round(timings.spawnTimeout / 1000)}s`);
+  connectionTimer = setTimeout(() => {
+    if (spawned || finished) return;
+    console.log(`[BOT] Connection timeout: no spawn after ${Math.round(timings.spawnTimeout / 1000)}s.`);
+    try { bot.removeAllListeners(); } catch {}
+    try { client?.removeAllListeners(); } catch {}
+    try { bot.end('connectionTimeout'); } catch {}
+    try { client?.socket?.destroy(); } catch {}
+    finish('connectionTimeout');
   }, timings.spawnTimeout);
-  spawnTimer.unref?.();
+  connectionTimer.unref?.();
 
-  bot.once('login', () => console.log('[BOT] Login accepted.'));
+  bot.once('login', () => console.log(`[BOT] Login accepted; negotiated Java ${bot.version || config.version || 'unknown'}.`));
+
   bot.once('spawn', () => {
-    if (finished) return;
+    if (finished || spawned) return;
     spawned = true;
-    clearTimeout(spawnTimer);
+    clearTimeout(connectionTimer);
     markPacket();
     state.phase = 'online';
     state.connectedAt = Date.now();
     state.connectingSince = null;
     state.successfulJoins += 1;
+    state.consecutiveFailures = 0;
     state.lastError = null;
     state.lastErrorAt = null;
-    console.log(`[BOT] Joined successfully using the direct legacy-style connection path.`);
+    console.log(`[BOT] Successfully spawned using Slobos-style connection logic (Java ${bot.version || 'unknown'}).`);
 
     state.controller = createAntiAfkController(
       bot,
       utils['anti-afk'] || {},
-      () => state.bot === bot && healthy()
+      () => state.bot === bot && actuallyConnected()
     );
     state.actionCounts = state.controller.counts;
     state.controller.start();
 
     packetTimer = setInterval(() => {
-      if (finished) return;
-      if (!socketUsable(bot)) {
-        forceClose('socket closed or not writable');
-        return;
-      }
-      const silence = state.lastPacketAt ? Date.now() - state.lastPacketAt : Infinity;
-      if (silence > timings.packetSilence) {
-        forceClose(`no incoming packets for ${Math.round(silence / 1000)}s`);
+      if (finished || !state.lastPacketAt) return;
+      const silence = Date.now() - state.lastPacketAt;
+      if (silence > timings.packetWarning && !silenceWarningLogged) {
+        silenceWarningLogged = true;
+        console.log(`[NETWORK WARNING] No incoming packet for ${Math.round(silence / 1000)}s; leaving Mineflayer's ${Math.round(timings.protocolTimeout / 1000)}s timeout in control.`);
       }
     }, timings.packetCheck);
     packetTimer.unref?.();
@@ -320,6 +349,7 @@ function startBot() {
     const messages = Array.isArray(chatConfig.messages)
       ? chatConfig.messages.filter(message => typeof message === 'string' && message.trim())
       : [];
+
     if (chatConfig.enabled && messages.length > 0) {
       const sendChat = () => {
         if (finished || state.phase !== 'online') return;
@@ -351,18 +381,21 @@ function startBot() {
   }
 
   bot.on('kicked', reason => {
-    state.lastKickReason = reasonText(reason);
+    const text = reasonText(reason);
+    state.lastKickReason = text;
     state.lastKickAt = new Date().toISOString();
-    console.log(`[KICKED] ${state.lastKickReason}`);
+    console.log(`[KICKED] ${text}`);
+
+    if (/throttl|wait before reconnect|too fast|rate.?limit/i.test(text)) {
+      state.throttled = true;
+      console.log('[RECONNECT] Throttle-style kick detected; next retry will wait 60–120 seconds.');
+    }
   });
 
   bot.on('error', error => {
     state.lastError = reasonText(error);
     state.lastErrorAt = new Date().toISOString();
-    console.log(`[ERROR] ${state.lastError}`);
-    if (!finished && /ECONN|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|EPIPE|ENOTFOUND|socket|keepalive|timed out/i.test(state.lastError)) {
-      forceClose(`network error: ${state.lastError}`);
-    }
+    console.error(`[ERROR] ${state.lastError}`);
   });
 
   bot.once('end', reason => finish(reason || 'connection ended'));
