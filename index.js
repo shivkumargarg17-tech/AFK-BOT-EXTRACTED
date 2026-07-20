@@ -12,6 +12,9 @@ require('./direct-connect').install();
 // Add lifecycle supervision, stale-socket cleanup, and delayed anti-AFK startup.
 require('./reliability').install();
 
+// Detect silent ghost sessions, stop fake actions, and force a clean reconnect.
+require('./ghost-watchdog').install();
+
 // Add the dashboard, readable disconnect categories, and connection history.
 require('./observability').install();
 
