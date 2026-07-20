@@ -1,12 +1,12 @@
 {
   "name": "bot-made-by-akshit",
-  "version": "5.0.0",
+  "version": "5.1.0",
   "private": true,
-  "description": "Minecraft Java AFK bot with Slobos-style connection and reconnect logic",
+  "description": "Minecraft Java AFK bot with supervised reconnect and anti-AFK movement",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "check": "node --check index.js && node --check service.js && node --check actions.js && node --check diagnostics.js && node --check login-debug.js"
+    "check": "node --check index.js && node --check service.js && node --check actions.js && node --check diagnostics.js && node --check login-debug.js && node --check reliability.js"
   },
   "engines": {
     "node": "24.14.1"
