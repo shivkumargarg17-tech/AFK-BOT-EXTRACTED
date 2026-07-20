@@ -62,7 +62,9 @@
     "connection-watchdog": {
       "check-interval": 20,
       "packet-warning": 180,
-      "tcp-keepalive-delay": 30
+      "tcp-keepalive-delay": 30,
+      "ghost-session-timeout": 60,
+      "ghost-check-interval": 10
     },
     "reliability": {
       "anti-afk-start-delay": 12,
