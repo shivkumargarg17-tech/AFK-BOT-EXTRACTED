@@ -6,13 +6,11 @@ require('./diagnostics').install();
 // Capture raw login-phase disconnect information before Mineflayer bots are created.
 require('./login-debug').install();
 
-// Force Mineflayer through our own IPv4 DNS lookup and raw TCP socket.
-require('./direct-connect').install();
-
 // Add lifecycle supervision, stale-socket cleanup, and delayed anti-AFK startup.
 require('./reliability').install();
 
 // Detect silent ghost sessions, stop fake actions, and force a clean reconnect.
+// This observes the Mineflayer session only; it does not replace its connection method.
 require('./ghost-watchdog').install();
 
 // Add the dashboard, readable disconnect categories, and connection history.
