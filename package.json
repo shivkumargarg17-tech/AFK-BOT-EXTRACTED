@@ -1,12 +1,12 @@
 {
   "name": "bot-made-by-akshit",
-  "version": "5.2.0",
+  "version": "5.2.1",
   "private": true,
   "description": "Minecraft Java AFK bot with supervised reconnects and a live status dashboard",
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "check": "node --check index.js && node --check service.js && node --check actions.js && node --check diagnostics.js && node --check login-debug.js && node --check direct-connect.js && node --check reliability.js && node --check ghost-watchdog.js && node --check observability.js"
+    "check": "node --check index.js && node --check service.js && node --check actions.js && node --check diagnostics.js && node --check login-debug.js && node --check reliability.js && node --check ghost-watchdog.js && node --check observability.js"
   },
   "engines": {
     "node": "24.14.1"
