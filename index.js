@@ -9,5 +9,8 @@ require('./login-debug').install();
 // Add lifecycle supervision, stale-socket cleanup, and delayed anti-AFK startup.
 require('./reliability').install();
 
+// Add the dashboard, readable disconnect categories, and connection history.
+require('./observability').install();
+
 // Render is configured with `node index.js`; keep this launcher as the stable entry point.
 require('./service');
