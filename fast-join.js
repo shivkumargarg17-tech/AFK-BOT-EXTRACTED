@@ -45,6 +45,11 @@ function install() {
     }
   }
 
+  function clearCachedVersion() {
+    if (!cacheEnabled) return;
+    try { fs.unlinkSync(cacheFile); } catch {}
+  }
+
   function saveCachedVersion(version) {
     if (!cacheEnabled || typeof version !== 'string' || !version.trim()) return;
     try {
@@ -68,6 +73,7 @@ function install() {
     const explicitVersion = typeof options.version === 'string' && options.version.trim()
       ? options.version.trim()
       : null;
+    const usedCachedVersion = !explicitVersion && Boolean(cachedVersion);
     const selectedVersion = explicitVersion || cachedVersion || false;
 
     if (!explicitVersion && cachedVersion) {
@@ -130,6 +136,11 @@ function install() {
     bot.once('end', () => {
       ended = true;
       clearTimers();
+      if (!spawned && usedCachedVersion) {
+        console.log('[FAST JOIN] Cached version failed before spawn; clearing it for the next auto-detect attempt.');
+        cachedVersion = null;
+        clearCachedVersion();
+      }
     });
 
     return bot;
