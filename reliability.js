@@ -19,8 +19,8 @@ function install() {
   const antiAfkStartDelay = Math.max(0, number(reliability['anti-afk-start-delay'], 12) * 1000);
   const kickCleanupDelay = Math.max(2000, number(reliability['kick-cleanup-delay'], 8) * 1000);
   const socketCheckInterval = Math.max(5000, number(reliability['socket-check-interval'], 15) * 1000);
-  const maximumConnectingTime = Math.max(180000, number(reliability['maximum-connecting-time'], 210) * 1000);
-  const noBotRestartTime = Math.max(240000, number(reliability['no-bot-restart-time'], 300) * 1000);
+  const maximumConnectingTime = Math.max(30000, number(reliability['maximum-connecting-time'], 45) * 1000);
+  const noBotWarningTime = Math.max(60000, number(reliability['no-bot-restart-time'], 180) * 1000);
   const minimumProtocolTimeout = Math.max(300000, number(reliability['minimum-protocol-timeout'], 600) * 1000);
 
   patchAntiAfkStart(antiAfkStartDelay);
@@ -28,7 +28,7 @@ function install() {
     kickCleanupDelay,
     socketCheckInterval,
     maximumConnectingTime,
-    noBotRestartTime,
+    noBotWarningTime,
     minimumProtocolTimeout
   });
 
@@ -83,15 +83,7 @@ function patchMineflayer(options) {
   const active = new Set();
   let createdOnce = false;
   let lastBotCreatedAt = Date.now();
-  let restartRequested = false;
-  const rejectionTimes = [];
-
-  function requestProcessRestart(reason) {
-    if (restartRequested) return;
-    restartRequested = true;
-    console.error(`[SUPERVISOR] ${reason} Restarting the Render process so its service manager can recover it.`);
-    setTimeout(() => process.exit(1), 1500).unref?.();
-  }
+  let lastNoBotWarningAt = 0;
 
   function forceSocketCleanup(meta, reason) {
     if (!meta || meta.ended || meta.cleanupRequested) return;
@@ -195,20 +187,21 @@ function patchMineflayer(options) {
       }
     }
 
-    if (createdOnce && active.size === 0 && now - lastBotCreatedAt > options.noBotRestartTime) {
-      requestProcessRestart(`No Mineflayer bot instance has existed for over ${options.noBotRestartTime / 1000}s.`);
+    if (
+      createdOnce &&
+      active.size === 0 &&
+      now - lastBotCreatedAt > options.noBotWarningTime &&
+      now - lastNoBotWarningAt > options.noBotWarningTime
+    ) {
+      lastNoBotWarningAt = now;
+      console.error(
+        `[SUPERVISOR] No Mineflayer bot instance has existed for over ` +
+        `${options.noBotWarningTime / 1000}s. Keeping the Render process alive; ` +
+        `the service reconnect loop remains in control.`
+      );
     }
   }, options.socketCheckInterval);
   watchdogTimer.unref?.();
-
-  process.on('unhandledRejection', () => {
-    const now = Date.now();
-    rejectionTimes.push(now);
-    while (rejectionTimes.length && now - rejectionTimes[0] > 5 * 60 * 1000) rejectionTimes.shift();
-    if (rejectionTimes.length >= 3) {
-      requestProcessRestart('Three unhandled promise rejections occurred within five minutes.');
-    }
-  });
 }
 
 module.exports = { install };
