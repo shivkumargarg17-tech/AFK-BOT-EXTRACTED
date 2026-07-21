@@ -9,6 +9,10 @@ require('./login-debug').install();
 // Add lifecycle supervision, stale-socket cleanup, and delayed anti-AFK startup.
 require('./reliability').install();
 
+// Speed up failed joins and reuse the negotiated Java version on reconnect.
+// This wraps one normal Mineflayer connection and never opens another socket.
+require('./fast-join').install();
+
 // Detect silent ghost sessions, stop fake actions, and force a clean reconnect.
 // This observes the Mineflayer session only; it does not replace its connection method.
 require('./ghost-watchdog').install();
