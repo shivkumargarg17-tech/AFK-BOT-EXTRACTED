@@ -57,19 +57,25 @@
       }
     },
     "readiness-probe": {
-      "spawn-timeout": 150
+      "spawn-timeout": 45
+    },
+    "fast-join": {
+      "join-timeout": 45,
+      "close-timeout": 15,
+      "no-pong-timeout": 8,
+      "cache-version": true
     },
     "connection-watchdog": {
-      "check-interval": 20,
-      "packet-warning": 180,
+      "check-interval": 10,
+      "packet-warning": 30,
       "tcp-keepalive-delay": 30,
-      "ghost-session-timeout": 60,
-      "ghost-check-interval": 10
+      "ghost-session-timeout": 45,
+      "ghost-check-interval": 5
     },
     "reliability": {
       "anti-afk-start-delay": 12,
-      "kick-cleanup-delay": 8,
-      "socket-check-interval": 15,
+      "kick-cleanup-delay": 4,
+      "socket-check-interval": 10,
       "maximum-connecting-time": 210,
       "no-bot-restart-time": 300,
       "minimum-protocol-timeout": 600
@@ -82,8 +88,8 @@
     },
     "chat-log": true,
     "auto-reconnect": true,
-    "auto-reconnect-delay": 3000,
-    "max-reconnect-delay": 120000,
+    "auto-reconnect-delay": 2000,
+    "max-reconnect-delay": 30000,
     "keepalive-timeout": 600
   }
 }
