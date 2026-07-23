@@ -5,7 +5,21 @@ require('./diagnostics').install();
 
 // Make settings.json authoritative so stale Render MC_* variables cannot point
 // the bot at an old server, port, username, or protocol version.
-require('./runtime-config');
+const settings = require('./settings.json');
+const account = settings['bot-account'] || {};
+const server = settings.server || {};
+
+process.env.MC_HOST = String(server.ip || '').trim();
+process.env.MC_PORT = String(server.port || '').trim();
+process.env.MC_USERNAME = String(account.username || 'AkshitAFKBot').trim();
+process.env.MC_AUTH = String(account.type || 'offline').trim().toLowerCase();
+process.env.MC_VERSION = String(server.version || '').trim();
+
+console.log(
+  `[CONFIG LOCK] settings.json is authoritative: ${process.env.MC_HOST}:${process.env.MC_PORT} ` +
+  `as ${process.env.MC_USERNAME}, Java ${process.env.MC_VERSION || 'auto-detect'}. ` +
+  'Stale Render MC_* variables were ignored.'
+);
 
 // Capture raw login-phase disconnect information before Mineflayer bots are created.
 require('./login-debug').install();
