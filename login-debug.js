@@ -29,10 +29,15 @@ function install() {
     const bot = originalCreateBot(options);
     const client = bot._client;
     let loginSeen = false;
+    let endSeen = false;
 
     bot.once('login', () => {
       loginSeen = true;
       console.log(`[LOGIN DEBUG] login accepted; clientState=${client?.state || 'unknown'}.`);
+    });
+
+    bot.once('end', () => {
+      endSeen = true;
     });
 
     bot.on('kicked', (reason, loggedIn) => {
@@ -57,6 +62,13 @@ function install() {
           `[LOGIN DEBUG] socket closed hadError=${Boolean(hadError)} ` +
           `clientState=${client?.state || 'unknown'} loginSeen=${loginSeen}.`
         );
+
+        const fallbackTimer = setTimeout(() => {
+          if (endSeen) return;
+          console.log('[LOGIN DEBUG] Socket closed without a Mineflayer end event; forcing reconnect cleanup.');
+          bot.emit('end', hadError ? 'socketErrorClosed' : 'socketClosed');
+        }, 1500);
+        fallbackTimer.unref?.();
       });
       socket?.once('error', error => {
         console.log(`[LOGIN DEBUG] socket error ${error?.code || ''} ${error?.message || inspect(error)}`.trim());
@@ -66,7 +78,7 @@ function install() {
     return bot;
   };
 
-  console.log('[LOGIN DEBUG] Detailed pre-login disconnect capture enabled.');
+  console.log('[LOGIN DEBUG] Detailed pre-login disconnect capture and socket-close recovery enabled.');
 }
 
 module.exports = { install };
