@@ -3,6 +3,10 @@
 // Install sanitized rolling logs before the service starts producing output.
 require('./diagnostics').install();
 
+// Make settings.json authoritative so stale Render MC_* variables cannot point
+// the bot at an old server, port, username, or protocol version.
+require('./runtime-config');
+
 // Capture raw login-phase disconnect information before Mineflayer bots are created.
 require('./login-debug').install();
 
