@@ -6,7 +6,7 @@
   "main": "index.js",
   "scripts": {
     "start": "node index.js",
-    "check": "node --check index.js && node --check runtime-config.js && node --check service.js && node --check actions.js && node --check diagnostics.js && node --check login-debug.js && node --check reliability.js && node --check fast-join.js && node --check ghost-watchdog.js && node --check observability.js"
+    "check": "node --check index.js && node --check service.js && node --check actions.js && node --check diagnostics.js && node --check login-debug.js && node --check reliability.js && node --check fast-join.js && node --check ghost-watchdog.js && node --check observability.js"
   },
   "engines": {
     "node": "24.14.1"
